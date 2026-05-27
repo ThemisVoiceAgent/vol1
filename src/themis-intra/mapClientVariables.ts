@@ -10,6 +10,7 @@ export function buildCallVariables(
     campaign_id: String(campaignId),
     selected_voice: selectedVoice,
     force_outside_schedule: "true",
+    intra_campaign: "true",
   };
 
   if (client.fk_task_id) {
@@ -37,6 +38,10 @@ export function buildCallVariables(
   }
   if (client.case_name) {
     vars.case_name = String(client.case_name);
+  }
+
+  if ((client as { days_overdue?: string | number }).days_overdue != null) {
+    vars.days_overdue = String((client as { days_overdue?: string | number }).days_overdue);
   }
 
   return vars;

@@ -7,11 +7,13 @@ import { firstValidPhone } from "../themis-intra/phone.js";
 import {
   insertCampaign,
   insertCampaignCall,
+  updateCampaignCallByCallId,
   fetchCampaignCalls,
   fetchCallsByIds,
   fetchCallsByCampaignId,
 } from "../themis-intra/campaignRepo.js";
 import { buildCallVariables } from "../themis-intra/mapClientVariables.js";
+import { applyThemisVariableAliases } from "../themis-intra/applyCallContext.js";
 import { buildStatisticsFromCallsOnly, buildStatisticsRows } from "../themis-intra/buildStatistics.js";
 import type { IntraCampaignClient, StartCampaignRequestBody } from "../themis-intra/types.js";
 
@@ -84,13 +86,46 @@ themisIntraRouter.post("/start_calls_campaign_api", requireThemisApiToken, async
     }
 
     const variables = buildCallVariables(client, campaignId, selectedVoice);
+    applyThemisVariableAliases(variables);
+    console.log("[ThemisIntra] mapped_variables", {
+      fk_task_id: variables.fk_task_id,
+      client_name: variables.client_name,
+      debt_amount: variables.debt_amount,
+      last_income_date: variables.last_income_date,
+      campaign_id: variables.campaign_id,
+    });
+
+    const callId = crypto.randomUUID();
+
+    // Persist before Twilio dials so media-stream can load context (Stream params are ~256 chars).
+    await insertCampaignCall({
+      campaign_id: campaignId,
+      call_id: callId,
+      fk_task_id: client.fk_task_id ? String(client.fk_task_id) : null,
+      client_name: client.name ? String(client.name) : null,
+      phone,
+      debt_amount: client.claim_remain != null ? String(client.claim_remain) : null,
+      twilio_call_sid: null,
+      from_number: null,
+      voice: selectedVoice,
+      call_variables: variables,
+    });
+
+    const twilioVariables = {
+      intra_campaign: "true",
+      campaign_id: String(campaignId),
+      fk_task_id: variables.fk_task_id || "",
+      client_name: variables.client_name || "",
+      debt_amount: variables.debt_amount || "",
+    };
 
     const result = await startOutboundCall(
       {
         to_number: phone,
         agent_id: agentId,
         campaign_id: String(campaignId),
-        variables,
+        call_id: callId,
+        variables: twilioVariables,
       },
       `${correlationId}-${client.fk_task_id || "client"}`
     );
@@ -124,16 +159,9 @@ themisIntraRouter.post("/start_calls_campaign_api", requireThemisApiToken, async
       started_at: new Date().toISOString(),
     });
 
-    await insertCampaignCall({
-      campaign_id: campaignId,
-      call_id: result.call_id,
-      fk_task_id: client.fk_task_id ? String(client.fk_task_id) : null,
-      client_name: client.name ? String(client.name) : null,
-      phone,
-      debt_amount: client.claim_remain != null ? String(client.claim_remain) : null,
+    await updateCampaignCallByCallId(callId, {
       twilio_call_sid: result.twilio_call_sid,
       from_number: result.from_number,
-      voice: selectedVoice,
     });
   }
 

@@ -8,6 +8,13 @@ import {
   upsertCall,
   updateCall,
 } from "../supabase.js";
+import { fetchCampaignCallByCallId } from "../themis-intra/campaignRepo.js";
+import {
+  mergeIntraIntoCallVariables,
+  logThemisContext,
+  parseStoredCallVariables,
+  appendThemisIntraContextBlock,
+} from "../themis-intra/applyCallContext.js";
 import type { IiziShadowState } from "../flow/iiziShadowFlow.js";
 import {
   createInitialIiziBrainState,
@@ -2349,6 +2356,20 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
       console.log(`[CallerContext] substituted caller_known=${callVariables.caller_known || "false"} callId=${callId}`);
     }
 
+    // Themis Intra outbound: full context from DB (Twilio Stream custom parameters are ~256 chars).
+    if (callId && callDirection === "outbound") {
+      try {
+        const intraRow = await fetchCampaignCallByCallId(callId);
+        const storedVars = parseStoredCallVariables(intraRow?.call_variables);
+        mergeIntraIntoCallVariables(callVariables, intraRow, storedVars);
+        if (callVariables.intra_campaign === "true") {
+          logThemisContext(callVariables, callId);
+        }
+      } catch (intraErr) {
+        console.warn(`[ThemisContext] failed to load Intra context callId=${callId}`, intraErr);
+      }
+    }
+
     // Substitute template variables (e.g. {{first_name}}, {{caller_name}})
     const substituteVars = (text: string): string => {
       if (!text) return text;
@@ -2493,6 +2514,9 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
     // that were used as language hints but aren't real variables.
     greeting = stripUnresolvedPlaceholders(greeting);
     instructions = stripUnresolvedPlaceholders(instructions);
+    if (callVariables.intra_campaign === "true") {
+      instructions = appendThemisIntraContextBlock(instructions, callVariables);
+    }
     // Make substitute available outside this scope for SMS sending
     substituteVarsRef = substituteVars;
 
@@ -5283,6 +5307,9 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
             try {
               callVariables = JSON.parse(varsParam);
               console.log(`[MediaStream] Parsed ${Object.keys(callVariables).length} call variables (callId=${callId})`);
+              if (callVariables.intra_campaign === "true") {
+                logThemisContext(callVariables, callId);
+              }
             } catch (e) {
               console.warn(`[MediaStream] Failed to parse variables param (callId=${callId})`);
             }

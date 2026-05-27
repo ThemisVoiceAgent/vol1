@@ -10,6 +10,8 @@ export interface StartOutboundCallParams {
   bridge_self_test?: string;
   /** Skip agent schedule check (Intra campaigns pass force via variables instead). */
   skip_schedule_check?: boolean;
+  /** Pre-assigned call id (Intra writes DB context before Twilio dials). */
+  call_id?: string;
 }
 
 export type StartOutboundCallResult =
@@ -58,9 +60,9 @@ export async function startOutboundCall(
     };
   }
 
-  const { to_number, agent_id, campaign_id, variables, bridge_self_test, skip_schedule_check } = params;
+  const { to_number, agent_id, campaign_id, variables, bridge_self_test, skip_schedule_check, call_id } = params;
 
-  const callId = crypto.randomUUID();
+  const callId = call_id || crypto.randomUUID();
   const variablesParam =
     variables && Object.keys(variables).length > 0
       ? `&variables=${encodeURIComponent(JSON.stringify(variables))}`

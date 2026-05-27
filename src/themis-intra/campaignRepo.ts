@@ -18,7 +18,27 @@ export interface CampaignCallRow {
   twilio_call_sid: string | null;
   from_number: string | null;
   voice: string | null;
+  call_variables?: Record<string, string> | null;
   created_at?: string;
+}
+
+export async function fetchCampaignCallByCallId(callId: string): Promise<CampaignCallRow | null> {
+  const h = authHeaders();
+  if (!h || !callId) return null;
+
+  const q = `/themis_campaign_calls?call_id=eq.${encodeURIComponent(callId)}&select=*&limit=1`;
+  try {
+    const res = await fetch(`${restBase()}${q}`, { method: "GET", headers: h });
+    if (!res.ok) {
+      console.warn(`[ThemisIntra] fetchCampaignCallByCallId HTTP ${res.status}`, await res.text());
+      return null;
+    }
+    const rows = (await res.json()) as CampaignCallRow[];
+    return rows?.[0] ?? null;
+  } catch (err) {
+    console.warn(`[ThemisIntra] fetchCampaignCallByCallId error`, err);
+    return null;
+  }
 }
 
 export interface CallRecordRow {
