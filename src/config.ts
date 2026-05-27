@@ -40,6 +40,16 @@ export const config = {
 
   /** Shared secret for orchestrator-local admin endpoints (brain-config, etc.) */
   orchestratorAdminSecret: process.env.ORCHESTRATOR_ADMIN_SECRET || "",
+
+  /** Legacy Intra / Themis campaign API */
+  themis: {
+    apiToken: process.env.THEMIS_API_TOKEN || "",
+    agentId: process.env.THEMIS_AGENT_ID || "",
+    defaultCallbackUrl: process.env.THEMIS_DEFAULT_CALLBACK_URL || "",
+    get isApiConfigured() {
+      return !!(this.apiToken && this.agentId);
+    },
+  },
 };
 
 export function getDeploymentIdentity() {

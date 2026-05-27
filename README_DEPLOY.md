@@ -72,8 +72,9 @@ This export includes the full orchestrator `src/` tree (including IIZI-related m
 ## Warning — secrets
 Do **not** commit real `.env` files or API keys to Git.
 
-Legacy Intra endpoints are not included yet:
-- `/start_calls_campaign_api`
-- `/get_campaign_statistics_api`
+Legacy Intra endpoints (require `THEMIS_API_TOKEN` + `THEMIS_AGENT_ID`):
+- `POST /start_calls_campaign_api`
+- `POST /get_campaign_statistics_api`
+- `GET /get_campaign_statistics_api?campaign_id=123`
 
-They must be added as the next step.
+Optional Supabase tables: see `migrations/001_themis_intra_tables.sql`. Statistics fall back to the `calls` table if campaign tables are missing.
