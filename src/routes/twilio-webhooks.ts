@@ -2,8 +2,210 @@ import { Router, Request, Response } from "express";
 import { config } from "../config.js";
 import { updateCallBySid, updateSmsBySid, fetchAgentByPhoneNumber, fetchAgentConfig } from "../supabase.js";
 import { evaluateSchedule, describeScheduleBlock, type AgentSchedule } from "../schedule.js";
+import {
+  hasSmsMessageForCallTemplate,
+  insertSmsMessage,
+  sendTwilioSms,
+  updateSmsMessageById,
+} from "../services/twilioSms.js";
 
 export const twilioWebhookRouter = Router();
+const THEMIS_POST_CALL_SMS_TEMPLATE = "themis_post_call_sms_v1";
+const THEMIS_POST_CALL_SMS_BODY_TEMPLATE =
+  "Tere! Tuletame meelde, et teil on tasumata võlg summas {{debtAmount}}. Nõuame võlgnevuse viivitamatut tasumist. Maksegraafiku sõlmimiseks pöörduge: https://www.themis.ee/graafik";
+
+type CallBySidRow = {
+  id: string;
+  campaign_id: string | null;
+  direction: string | null;
+  to_number: string | null;
+  from_number: string | null;
+  answered_at: string | null;
+};
+
+type CampaignCallDebtRow = {
+  debt_amount: string | null;
+  call_variables?: Record<string, unknown> | string | null;
+};
+
+function restBase(): string {
+  return `${config.supabase.url.replace(/\/+$/, "")}/rest/v1`;
+}
+
+function restHeaders(): Record<string, string> | null {
+  const key = config.supabase.serviceRoleKey || config.supabase.anonKey;
+  if (!config.supabase.url || !key) return null;
+  return {
+    apikey: key,
+    Authorization: `Bearer ${key}`,
+    "Content-Type": "application/json",
+  };
+}
+
+async function fetchCallBySid(callSid: string): Promise<CallBySidRow | null> {
+  const headers = restHeaders();
+  if (!headers || !callSid) return null;
+  const q =
+    `/calls?twilio_call_sid=eq.${encodeURIComponent(callSid)}` +
+    `&select=id,campaign_id,direction,to_number,from_number,answered_at&limit=1`;
+  try {
+    const res = await fetch(`${restBase()}${q}`, { method: "GET", headers });
+    if (!res.ok) {
+      console.error(`[TwilioStatusSMS] fetchCallBySid HTTP ${res.status}`, await res.text());
+      return null;
+    }
+    const rows = (await res.json()) as CallBySidRow[];
+    return rows?.[0] ?? null;
+  } catch (err) {
+    console.error(`[TwilioStatusSMS] fetchCallBySid error`, err);
+    return null;
+  }
+}
+
+function parseCallVariables(raw: unknown): Record<string, string> | null {
+  if (!raw) return null;
+  if (typeof raw === "object" && !Array.isArray(raw)) {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (v !== undefined && v !== null && v !== "") out[k] = String(v);
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  }
+  if (typeof raw === "string") {
+    try {
+      return parseCallVariables(JSON.parse(raw));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+async function fetchCampaignCallDebtByCallId(callId: string): Promise<CampaignCallDebtRow | null> {
+  const headers = restHeaders();
+  if (!headers || !callId) return null;
+  const q =
+    `/themis_campaign_calls?call_id=eq.${encodeURIComponent(callId)}` +
+    `&select=debt_amount,call_variables&limit=1`;
+  try {
+    const res = await fetch(`${restBase()}${q}`, { method: "GET", headers });
+    if (!res.ok) {
+      console.error(`[TwilioStatusSMS] fetchCampaignCallDebtByCallId HTTP ${res.status}`, await res.text());
+      return null;
+    }
+    const rows = (await res.json()) as CampaignCallDebtRow[];
+    return rows?.[0] ?? null;
+  } catch (err) {
+    console.error(`[TwilioStatusSMS] fetchCampaignCallDebtByCallId error`, err);
+    return null;
+  }
+}
+
+function resolveDebtAmountText(row: CampaignCallDebtRow | null): string | null {
+  if (!row) return null;
+  const direct = (row.debt_amount || "").trim();
+  if (direct) return direct;
+  const vars = parseCallVariables(row.call_variables);
+  const fromVars = (vars?.debt_amount || vars?.claim_remain || "").trim();
+  return fromVars || null;
+}
+
+async function maybeSendThemisPostCallSms(params: {
+  correlationId: string;
+  callSid: string;
+  normalizedStatus: string;
+  callDurationRaw: unknown;
+}): Promise<void> {
+  const { correlationId, callSid, normalizedStatus, callDurationRaw } = params;
+  if (normalizedStatus !== "completed") return;
+
+  const callRow = await fetchCallBySid(callSid);
+  if (!callRow) {
+    console.warn(`[TwilioStatusSMS] skip: call not found callSid=${callSid}`);
+    return;
+  }
+
+  const isOutbound = (callRow.direction || "").toLowerCase() === "outbound";
+  const hasCampaign = !!(callRow.campaign_id && String(callRow.campaign_id).trim());
+  if (!isOutbound || !hasCampaign) {
+    console.log(
+      `[TwilioStatusSMS] skip: non-Themis-or-non-outbound callId=${callRow.id} direction=${callRow.direction || "-"} campaign_id=${callRow.campaign_id || "-"}`
+    );
+    return;
+  }
+
+  const durationSeconds = parseInt(String(callDurationRaw || "0"), 10);
+  const wasAnswered = Boolean(callRow.answered_at) || (Number.isFinite(durationSeconds) && durationSeconds > 0);
+  if (!wasAnswered) {
+    console.log(`[TwilioStatusSMS] skip: completed without answered proof callId=${callRow.id} callSid=${callSid}`);
+    return;
+  }
+
+  const recipient = (callRow.to_number || "").trim();
+  if (!recipient) {
+    console.warn(`[TwilioStatusSMS] skip: missing debtor phone callId=${callRow.id} callSid=${callSid}`);
+    return;
+  }
+
+  const debtRow = await fetchCampaignCallDebtByCallId(callRow.id);
+  const debtAmount = resolveDebtAmountText(debtRow);
+  if (!debtAmount) {
+    console.warn(`[TwilioStatusSMS] skip: missing debt amount callId=${callRow.id} callSid=${callSid}`);
+    return;
+  }
+  const smsBody = THEMIS_POST_CALL_SMS_BODY_TEMPLATE.replace("{{debtAmount}}", `${debtAmount}€`);
+
+  const alreadySent = await hasSmsMessageForCallTemplate(callRow.id, THEMIS_POST_CALL_SMS_TEMPLATE);
+  if (alreadySent === null) {
+    console.warn(`[TwilioStatusSMS] skip: idempotency check unavailable callId=${callRow.id} callSid=${callSid}`);
+    return;
+  }
+  if (alreadySent) {
+    console.log(`[TwilioStatusSMS] skip: already sent callId=${callRow.id} callSid=${callSid}`);
+    return;
+  }
+
+  const smsRowId = await insertSmsMessage({
+    call_id: callRow.id,
+    agent_id: null,
+    template_name: THEMIS_POST_CALL_SMS_TEMPLATE,
+    direction: "outbound",
+    from_number: config.twilio.fromNumber || "",
+    to_number: recipient,
+    body: smsBody,
+    twilio_sid: null,
+    status: "queued",
+  });
+  if (!smsRowId) {
+    console.error(`[TwilioStatusSMS] skip: failed to persist SMS marker callId=${callRow.id} callSid=${callSid}`);
+    return;
+  }
+
+  const sendResult = await sendTwilioSms({
+    to: recipient,
+    body: smsBody,
+    statusCallbackUrl: `${config.publicBaseUrl}/twilio/sms-status`,
+  });
+
+  if (sendResult.ok) {
+    await updateSmsMessageById(smsRowId, {
+      twilio_sid: sendResult.sid || null,
+      status: sendResult.status || "sent",
+    });
+    console.log(
+      `[TwilioStatusSMS] sent ok callId=${callRow.id} callSid=${callSid} to=${recipient} smsSid=${sendResult.sid || "-"} correlationId=${correlationId}`
+    );
+    return;
+  }
+
+  await updateSmsMessageById(smsRowId, {
+    twilio_sid: sendResult.sid || null,
+    status: `failed:${sendResult.errorCode || "send"}`,
+  });
+  console.error(
+    `[TwilioStatusSMS] send failed callId=${callRow.id} callSid=${callSid} to=${recipient} error=${sendResult.error || "-"} errorCode=${sendResult.errorCode || "-"} correlationId=${correlationId}`
+  );
+}
 
 /**
  * POST /twilio/voice — Twilio voice webhook
@@ -172,6 +374,12 @@ twilioWebhookRouter.post("/status", async (req: Request, res: Response) => {
     }
 
     await updateCallBySid(CallSid, data);
+    await maybeSendThemisPostCallSms({
+      correlationId,
+      callSid: CallSid,
+      normalizedStatus: String(data.status || ""),
+      callDurationRaw: CallDuration,
+    });
   }
 
   return res.json({ ok: true, correlation_id: correlationId });
