@@ -1706,12 +1706,13 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
     if (Date.now() < inboundAudioCooldownUntil) {
       return "post_playback_cooldown";
     }
-    // Outbound: block caller audio during assistant playback ONLY when barge-in is
-    // disabled. When interrupt_response=true (and anti_barge_in=false), let the caller's
-    // audio through so OpenAI server VAD can interrupt the bot mid-sentence.
+    // Outbound: barge-in is the default. Only block caller audio during assistant
+    // playback when anti_barge_in is explicitly enabled. Otherwise let the caller's
+    // audio through so OpenAI server VAD can interrupt the bot mid-sentence even if the
+    // stored interrupt_response flag is false.
     if (
       callDirection === "outbound" &&
-      (antiBargeinEnabled || liveTurnSettings.interrupt_response === false) &&
+      antiBargeinEnabled &&
       assistantPlaybackProtected()
     ) {
       return "assistant_speaking";
@@ -2076,8 +2077,7 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
     callDirection === "outbound" &&
     !greetingInProgress &&
     initialGreetingResponseFinished &&
-    !antiBargeinEnabled &&
-    liveTurnSettings.interrupt_response === true;
+    !antiBargeinEnabled;
 
   /**
    * Stop active assistant playback so the caller's interruption is handled.
@@ -2136,7 +2136,12 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
       prefix_padding_ms: liveTurnSettings.prefix_padding_ms,
       silence_duration_ms: liveTurnSettings.silence_duration_ms,
       create_response: vadAutoCreateResponse,
-      interrupt_response: liveTurnSettings.interrupt_response,
+      // Outbound barge-in is the default (unless anti_barge_in is on): let OpenAI server
+      // VAD interrupt the active assistant response even if the stored flag is false.
+      interrupt_response:
+        callDirection === "outbound" && !antiBargeinEnabled
+          ? true
+          : liveTurnSettings.interrupt_response,
     };
     const patchFields: Record<string, unknown> = {
       audio: {
