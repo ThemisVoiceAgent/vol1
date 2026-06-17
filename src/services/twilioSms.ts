@@ -24,6 +24,10 @@ export interface SmsMessageInsertRow {
   body: string;
   twilio_sid: string | null;
   status: string;
+  /** Optional provider-aware fields (require migration 003). Omitted keys are not sent. */
+  provider?: string;
+  provider_message_id?: string | null;
+  sender_name?: string;
 }
 
 function getSupabaseRestHeaders(): Record<string, string> | null {

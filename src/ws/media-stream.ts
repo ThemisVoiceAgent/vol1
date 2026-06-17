@@ -18,9 +18,15 @@ import {
 import {
   hasSmsMessageForCallTemplate,
   insertSmsMessage,
-  sendTwilioSms,
   updateSmsMessageById,
 } from "../services/twilioSms.js";
+import {
+  THEMIS_POST_CALL_SMS_TEMPLATE,
+  renderThemisPostCallSmsBody,
+  resolveThemisSmsProvider,
+  resolveThemisSmsSender,
+  sendThemisPostCallSms,
+} from "../services/themisPostCallSms.js";
 import type { IiziShadowState } from "../flow/iiziShadowFlow.js";
 import {
   createInitialIiziBrainState,
@@ -443,9 +449,6 @@ async function sendSms(to: string, body: string): Promise<{ ok: boolean; sid?: s
 }
 
 const OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime";
-const THEMIS_POST_CALL_SMS_TEMPLATE = "themis_post_call_sms_v1";
-const THEMIS_POST_CALL_SMS_BODY_TEMPLATE =
-  "Tere! Tuletame meelde, et teil on tasumata võlg summas {{debtAmount}}. Nõuame võlgnevuse viivitamatut tasumist. Maksegraafiku sõlmimiseks pöörduge: https://www.themis.ee/graafik";
 /** GA Realtime: G.711 μ-law (Twilio-compatible). */
 const REALTIME_GA_ULAW_FORMAT = { type: "audio/pcmu" } as const;
 const REALTIME_GA_RESPONSE_MODALITIES = ["audio"] as const;
@@ -1703,7 +1706,14 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
     if (Date.now() < inboundAudioCooldownUntil) {
       return "post_playback_cooldown";
     }
-    if (callDirection === "outbound" && assistantPlaybackProtected()) {
+    // Outbound: block caller audio during assistant playback ONLY when barge-in is
+    // disabled. When interrupt_response=true (and anti_barge_in=false), let the caller's
+    // audio through so OpenAI server VAD can interrupt the bot mid-sentence.
+    if (
+      callDirection === "outbound" &&
+      (antiBargeinEnabled || liveTurnSettings.interrupt_response === false) &&
+      assistantPlaybackProtected()
+    ) {
       return "assistant_speaking";
     }
     if (strictTurnGateEnabled() && assistantPlaybackProtected()) {
@@ -5295,41 +5305,47 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
         return;
       }
 
-      const smsBody = THEMIS_POST_CALL_SMS_BODY_TEMPLATE.replace("{{debtAmount}}", `${debtAmount}€`);
+      const smsBody = renderThemisPostCallSmsBody(debtAmount);
+      const provider = resolveThemisSmsProvider();
+      const sender = resolveThemisSmsSender(provider);
+      console.log(`[ThemisSMS] provider=${provider} sender=${sender}`);
+
       const smsRowId = await insertSmsMessage({
         call_id: callId || null,
         agent_id: resolvedAgentIdRef,
         template_name: THEMIS_POST_CALL_SMS_TEMPLATE,
         direction: "outbound",
-        from_number: config.twilio.fromNumber || "",
+        from_number: sender,
         to_number: recipient,
         body: smsBody,
         twilio_sid: null,
         status: "queued",
+        ...(provider === "messente" ? { provider, sender_name: sender } : {}),
       });
       if (!smsRowId) {
         console.log(`[ThemisSMS] skipped reason=persist_marker_failed callId=${callId}`);
         return;
       }
 
-      const result = await sendTwilioSms({
-        to: recipient,
-        body: smsBody,
-        statusCallbackUrl: `${config.publicBaseUrl}/twilio/sms-status`,
-      });
+      const result = await sendThemisPostCallSms({ to: recipient, body: smsBody });
       if (result.ok) {
-        await updateSmsMessageById(smsRowId, {
-          twilio_sid: result.sid || null,
-          status: result.status || "sent",
-        });
-        console.log(`[ThemisSMS] sent callId=${callId} smsSid=${result.sid || "-"}`);
+        const patch: Record<string, unknown> = { status: result.status || "sent" };
+        if (result.provider === "messente") {
+          patch.provider = "messente";
+          patch.provider_message_id = result.providerMessageId || null;
+        } else {
+          patch.twilio_sid = result.providerMessageId || null;
+        }
+        await updateSmsMessageById(smsRowId, patch);
+        console.log(
+          `[ThemisSMS] sent via ${result.provider} callId=${callId} providerMessageId=${result.providerMessageId || "-"}`
+        );
       } else {
         await updateSmsMessageById(smsRowId, {
-          twilio_sid: result.sid || null,
           status: `failed:${result.errorCode || "send"}`,
         });
         console.log(
-          `[ThemisSMS] skipped reason=send_failed callId=${callId} error=${result.error || "-"} errorCode=${result.errorCode || "-"}`
+          `[ThemisSMS] ${result.provider} failed callId=${callId} status=${result.errorCode || "-"} error=${result.error || "-"}`
         );
       }
     })().catch((err) => {

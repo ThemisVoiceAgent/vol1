@@ -5,14 +5,17 @@ import { evaluateSchedule, describeScheduleBlock, type AgentSchedule } from "../
 import {
   hasSmsMessageForCallTemplate,
   insertSmsMessage,
-  sendTwilioSms,
   updateSmsMessageById,
 } from "../services/twilioSms.js";
+import {
+  THEMIS_POST_CALL_SMS_TEMPLATE,
+  renderThemisPostCallSmsBody,
+  resolveThemisSmsProvider,
+  resolveThemisSmsSender,
+  sendThemisPostCallSms,
+} from "../services/themisPostCallSms.js";
 
 export const twilioWebhookRouter = Router();
-const THEMIS_POST_CALL_SMS_TEMPLATE = "themis_post_call_sms_v1";
-const THEMIS_POST_CALL_SMS_BODY_TEMPLATE =
-  "Tere! Tuletame meelde, et teil on tasumata võlg summas {{debtAmount}}. Nõuame võlgnevuse viivitamatut tasumist. Maksegraafiku sõlmimiseks pöörduge: https://www.themis.ee/graafik";
 
 type CallBySidRow = {
   id: string;
@@ -153,7 +156,7 @@ async function maybeSendThemisPostCallSms(params: {
     console.warn(`[TwilioStatusSMS] skip: missing debt amount callId=${callRow.id} callSid=${callSid}`);
     return;
   }
-  const smsBody = THEMIS_POST_CALL_SMS_BODY_TEMPLATE.replace("{{debtAmount}}", `${debtAmount}€`);
+  const smsBody = renderThemisPostCallSmsBody(debtAmount);
 
   const alreadySent = await hasSmsMessageForCallTemplate(callRow.id, THEMIS_POST_CALL_SMS_TEMPLATE);
   if (alreadySent === null) {
@@ -165,45 +168,49 @@ async function maybeSendThemisPostCallSms(params: {
     return;
   }
 
+  const provider = resolveThemisSmsProvider();
+  const sender = resolveThemisSmsSender(provider);
+  console.log(`[ThemisSMS] provider=${provider} sender=${sender}`);
+
   const smsRowId = await insertSmsMessage({
     call_id: callRow.id,
     agent_id: null,
     template_name: THEMIS_POST_CALL_SMS_TEMPLATE,
     direction: "outbound",
-    from_number: config.twilio.fromNumber || "",
+    from_number: sender,
     to_number: recipient,
     body: smsBody,
     twilio_sid: null,
     status: "queued",
+    ...(provider === "messente" ? { provider, sender_name: sender } : {}),
   });
   if (!smsRowId) {
     console.error(`[TwilioStatusSMS] skip: failed to persist SMS marker callId=${callRow.id} callSid=${callSid}`);
     return;
   }
 
-  const sendResult = await sendTwilioSms({
-    to: recipient,
-    body: smsBody,
-    statusCallbackUrl: `${config.publicBaseUrl}/twilio/sms-status`,
-  });
+  const sendResult = await sendThemisPostCallSms({ to: recipient, body: smsBody });
 
   if (sendResult.ok) {
-    await updateSmsMessageById(smsRowId, {
-      twilio_sid: sendResult.sid || null,
-      status: sendResult.status || "sent",
-    });
+    const patch: Record<string, unknown> = { status: sendResult.status || "sent" };
+    if (sendResult.provider === "messente") {
+      patch.provider = "messente";
+      patch.provider_message_id = sendResult.providerMessageId || null;
+    } else {
+      patch.twilio_sid = sendResult.providerMessageId || null;
+    }
+    await updateSmsMessageById(smsRowId, patch);
     console.log(
-      `[TwilioStatusSMS] sent ok callId=${callRow.id} callSid=${callSid} to=${recipient} smsSid=${sendResult.sid || "-"} correlationId=${correlationId}`
+      `[ThemisSMS] sent via ${sendResult.provider} callId=${callRow.id} callSid=${callSid} providerMessageId=${sendResult.providerMessageId || "-"} correlationId=${correlationId}`
     );
     return;
   }
 
   await updateSmsMessageById(smsRowId, {
-    twilio_sid: sendResult.sid || null,
     status: `failed:${sendResult.errorCode || "send"}`,
   });
   console.error(
-    `[TwilioStatusSMS] send failed callId=${callRow.id} callSid=${callSid} to=${recipient} error=${sendResult.error || "-"} errorCode=${sendResult.errorCode || "-"} correlationId=${correlationId}`
+    `[ThemisSMS] ${sendResult.provider} failed callId=${callRow.id} callSid=${callSid} status=${sendResult.errorCode || "-"} error=${sendResult.error || "-"} correlationId=${correlationId}`
   );
 }
 
