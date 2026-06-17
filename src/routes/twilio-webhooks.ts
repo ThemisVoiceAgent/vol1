@@ -18,6 +18,10 @@ import {
   THEMIS_NOT_PICKED_UP_STATUSES,
   scheduleThemisRetryIfNeeded,
 } from "../themis-intra/retry.js";
+import {
+  maybeExportThemisSheetForNotPickedUp,
+  maybeUpdateThemisSheetRecording,
+} from "../services/themisSheetExport.js";
 
 export const twilioWebhookRouter = Router();
 
@@ -435,6 +439,10 @@ twilioWebhookRouter.post("/status", async (req: Request, res: Response) => {
       callSid: CallSid,
       normalizedStatus: String(data.status || ""),
     });
+    await maybeExportThemisSheetForNotPickedUp({
+      callSid: CallSid,
+      normalizedStatus: String(data.status || ""),
+    });
   }
 
   return res.json({ ok: true, correlation_id: correlationId });
@@ -619,6 +627,7 @@ twilioWebhookRouter.post("/recording-status", async (req: Request, res: Response
       recording_url: recordingUrlMp3,
     });
     console.log(`[${correlationId}] Recording saved for CallSid=${CallSid}: ${recordingUrlMp3}`);
+    await maybeUpdateThemisSheetRecording(CallSid, recordingUrlMp3);
   }
 
   return res.json({ ok: true, correlation_id: correlationId });

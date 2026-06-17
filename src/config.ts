@@ -46,6 +46,13 @@ export const config = {
     apiToken: process.env.THEMIS_API_TOKEN || "",
     agentId: process.env.THEMIS_AGENT_ID || "",
     defaultCallbackUrl: process.env.THEMIS_DEFAULT_CALLBACK_URL || "",
+    sheets: {
+      exportEnabled: String(process.env.THEMIS_SHEETS_EXPORT_ENABLED || "").toLowerCase() === "true",
+      spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID || "",
+      sheetName: process.env.GOOGLE_SHEETS_SHEET_NAME || "",
+      /** Raw JSON string from Railway env (pretty-printed OK; private_key may contain \\n). */
+      serviceAccountJson: process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "",
+    },
     get isApiConfigured() {
       return !!(this.apiToken && this.agentId);
     },

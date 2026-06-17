@@ -27,6 +27,7 @@ import {
   resolveThemisSmsSender,
   sendThemisPostCallSms,
 } from "../services/themisPostCallSms.js";
+import { queueThemisSheetExportForAnsweredCall } from "../services/themisSheetExport.js";
 import type { IiziShadowState } from "../flow/iiziShadowFlow.js";
 import {
   createInitialIiziBrainState,
@@ -5312,6 +5313,13 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
       ended_at: endTime.toISOString(),
       duration_seconds: durationSeconds,
       transcript,
+    });
+
+    queueThemisSheetExportForAnsweredCall({
+      callId,
+      transcript,
+      campaignId,
+      callDirection,
     });
 
     // Themis outbound post-call SMS trigger from media-stream finalization.
