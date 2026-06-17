@@ -15,6 +15,7 @@ import {
 import { buildCallVariables } from "../themis-intra/mapClientVariables.js";
 import { applyThemisVariableAliases } from "../themis-intra/applyCallContext.js";
 import { buildStatisticsFromCallsOnly, buildStatisticsRows } from "../themis-intra/buildStatistics.js";
+import { processDueThemisRetries } from "../themis-intra/retry.js";
 import type { IntraCampaignClient, StartCampaignRequestBody } from "../themis-intra/types.js";
 
 export const themisIntraRouter = Router();
@@ -244,3 +245,23 @@ themisIntraRouter.get("/get_campaign_statistics_api", requireThemisApiToken, asy
   const campaignIdRaw = req.query.campaign_id;
   await handleGetCampaignStatistics(req, res, campaignIdRaw);
 });
+
+/**
+ * POST /internal/themis/process_due_retries — protected retry processor.
+ * Finds due +5h retries and starts attempt-2 calls. Intended to be invoked by
+ * Railway cron or an external scheduler. Protected by X-API-Token.
+ */
+themisIntraRouter.post(
+  "/internal/themis/process_due_retries",
+  requireThemisApiToken,
+  async (_req: Request, res: Response) => {
+    const correlationId = crypto.randomUUID();
+    console.log(`[ThemisRetry] process_due_retries invoked correlationId=${correlationId}`);
+    const summary = await processDueThemisRetries(correlationId);
+    return res.json({
+      status: "success",
+      message: "Due retries processed",
+      data: { correlation_id: correlationId, ...summary },
+    });
+  }
+);

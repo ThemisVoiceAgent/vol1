@@ -20,6 +20,13 @@ export interface CampaignCallRow {
   voice: string | null;
   call_variables?: Record<string, string> | null;
   created_at?: string;
+  // Retry bookkeeping (migration 004). Optional so existing inserts stay valid.
+  attempt_number?: number;
+  original_call_id?: string | null;
+  retry_scheduled_at?: string | null;
+  retry_attempted_at?: string | null;
+  retry_status?: string | null;
+  retry_reason?: string | null;
 }
 
 export async function fetchCampaignCallByCallId(callId: string): Promise<CampaignCallRow | null> {
@@ -179,6 +186,113 @@ export async function fetchCallsByIds(callIds: string[]): Promise<Map<string, Ca
   }
 
   return map;
+}
+
+/**
+ * Guarded scheduling of a single +5h retry. PostgREST only patches rows that
+ * still match (attempt_number < 2 AND retry_status IS NULL), so a second
+ * not-picked-up callback for the same call updates nothing and never
+ * double-schedules. Returns the number of rows actually scheduled (0 or 1).
+ */
+export async function scheduleCampaignRetry(
+  callId: string,
+  retryAtIso: string,
+  reason: string
+): Promise<number> {
+  const h = authHeaders();
+  if (!h || !callId) return 0;
+  const q =
+    `/themis_campaign_calls?call_id=eq.${encodeURIComponent(callId)}` +
+    `&attempt_number=lt.2&retry_status=is.null`;
+  try {
+    const res = await fetch(`${restBase()}${q}`, {
+      method: "PATCH",
+      headers: { ...h, Prefer: "return=representation" },
+      body: JSON.stringify({
+        retry_scheduled_at: retryAtIso,
+        retry_status: "scheduled",
+        retry_reason: reason,
+      }),
+    });
+    if (!res.ok) {
+      console.warn(`[ThemisRetry] scheduleCampaignRetry HTTP ${res.status}`, await res.text());
+      return 0;
+    }
+    const rows = (await res.json()) as unknown[];
+    return Array.isArray(rows) ? rows.length : 0;
+  } catch (err) {
+    console.warn(`[ThemisRetry] scheduleCampaignRetry error`, err);
+    return 0;
+  }
+}
+
+/** Rows whose retry is due (scheduled, not yet attempted, retry_scheduled_at <= now). */
+export async function fetchDueCampaignRetries(nowIso: string, limit = 25): Promise<CampaignCallRow[]> {
+  const h = authHeaders();
+  if (!h) return [];
+  const q =
+    `/themis_campaign_calls?retry_status=eq.scheduled&retry_attempted_at=is.null` +
+    `&retry_scheduled_at=lte.${encodeURIComponent(nowIso)}` +
+    `&select=*&order=retry_scheduled_at.asc&limit=${limit}`;
+  try {
+    const res = await fetch(`${restBase()}${q}`, { method: "GET", headers: h });
+    if (!res.ok) {
+      console.warn(`[ThemisRetry] fetchDueCampaignRetries HTTP ${res.status}`, await res.text());
+      return [];
+    }
+    return (await res.json()) as CampaignCallRow[];
+  } catch (err) {
+    console.warn(`[ThemisRetry] fetchDueCampaignRetries error`, err);
+    return [];
+  }
+}
+
+/**
+ * Atomically claim a due retry row by flipping retry_status scheduled -> attempted.
+ * Only one caller can win because the filter requires retry_status=scheduled.
+ * Returns true if this caller won the row.
+ */
+export async function claimCampaignRetry(rowId: string): Promise<boolean> {
+  const h = authHeaders();
+  if (!h || !rowId) return false;
+  const q = `/themis_campaign_calls?id=eq.${encodeURIComponent(rowId)}&retry_status=eq.scheduled`;
+  try {
+    const res = await fetch(`${restBase()}${q}`, {
+      method: "PATCH",
+      headers: { ...h, Prefer: "return=representation" },
+      body: JSON.stringify({
+        retry_status: "attempted",
+        retry_attempted_at: new Date().toISOString(),
+      }),
+    });
+    if (!res.ok) {
+      console.warn(`[ThemisRetry] claimCampaignRetry HTTP ${res.status}`, await res.text());
+      return false;
+    }
+    const rows = (await res.json()) as unknown[];
+    return Array.isArray(rows) && rows.length > 0;
+  } catch (err) {
+    console.warn(`[ThemisRetry] claimCampaignRetry error`, err);
+    return false;
+  }
+}
+
+/** Update retry bookkeeping on a row by its primary id. */
+export async function updateCampaignCallById(
+  rowId: string,
+  patch: Partial<CampaignCallRow>
+): Promise<void> {
+  const h = authHeaders();
+  if (!h || !rowId) return;
+  try {
+    await fetch(`${restBase()}/themis_campaign_calls?id=eq.${encodeURIComponent(rowId)}`, {
+      method: "PATCH",
+      headers: { ...h, Prefer: "return=minimal" },
+      body: JSON.stringify(patch),
+    });
+  } catch (err) {
+    console.warn(`[ThemisRetry] updateCampaignCallById error`, err);
+  }
 }
 
 /** Fallback when themis_campaign_calls table is empty/unavailable. */

@@ -14,6 +14,10 @@ import {
   resolveThemisSmsSender,
   sendThemisPostCallSms,
 } from "../services/themisPostCallSms.js";
+import {
+  THEMIS_NOT_PICKED_UP_STATUSES,
+  scheduleThemisRetryIfNeeded,
+} from "../themis-intra/retry.js";
 
 export const twilioWebhookRouter = Router();
 
@@ -215,6 +219,45 @@ async function maybeSendThemisPostCallSms(params: {
 }
 
 /**
+ * Schedule a single +5h retry when a Themis outbound call was not picked up.
+ * Only acts on terminal not-picked-up statuses and never on answered calls.
+ */
+async function maybeScheduleThemisRetry(params: {
+  correlationId: string;
+  callSid: string;
+  normalizedStatus: string;
+}): Promise<void> {
+  const { correlationId, callSid, normalizedStatus } = params;
+  if (!THEMIS_NOT_PICKED_UP_STATUSES.has(normalizedStatus)) return;
+
+  const callRow = await fetchCallBySid(callSid);
+  if (!callRow) {
+    console.warn(`[ThemisRetry] skip: call not found callSid=${callSid}`);
+    return;
+  }
+
+  const isOutbound = (callRow.direction || "").toLowerCase() === "outbound";
+  const hasCampaign = !!(callRow.campaign_id && String(callRow.campaign_id).trim());
+  if (!isOutbound || !hasCampaign) {
+    console.log(
+      `[ThemisRetry] skip: non-Themis-or-non-outbound callId=${callRow.id} direction=${callRow.direction || "-"} campaign_id=${callRow.campaign_id || "-"}`
+    );
+    return;
+  }
+
+  if (callRow.answered_at) {
+    console.log(`[ThemisRetry] skip: call has answered proof callId=${callRow.id} callSid=${callSid}`);
+    return;
+  }
+
+  await scheduleThemisRetryIfNeeded({
+    callId: callRow.id,
+    reason: normalizedStatus,
+    correlationId,
+  });
+}
+
+/**
  * POST /twilio/voice — Twilio voice webhook
  * Returns TwiML that opens a bidirectional Media Stream to /twilio/stream
  */
@@ -386,6 +429,11 @@ twilioWebhookRouter.post("/status", async (req: Request, res: Response) => {
       callSid: CallSid,
       normalizedStatus: String(data.status || ""),
       callDurationRaw: CallDuration,
+    });
+    await maybeScheduleThemisRetry({
+      correlationId,
+      callSid: CallSid,
+      normalizedStatus: String(data.status || ""),
     });
   }
 
