@@ -22,6 +22,8 @@ import {
   maybeExportThemisSheetForNotPickedUp,
   maybeUpdateThemisSheetRecording,
 } from "../services/themisSheetExport.js";
+import { fetchTwilioRecordingAudio } from "../services/recordingPlayback.js";
+import { fetchCallForExport } from "../themis-intra/sheetExportRepo.js";
 
 export const twilioWebhookRouter = Router();
 
@@ -606,6 +608,27 @@ twilioWebhookRouter.post("/sms-fallback", async (req: Request, res: Response) =>
   console.log(`[TwilioSmsFallback] ──────────────────────────────────────────`);
 
   return res.status(200).json(responsePayload);
+});
+
+/**
+ * GET /twilio/recording-playback/:callId — stream call recording without Twilio basic-auth prompt.
+ * Used by Google Sheets links and other browser playback.
+ */
+twilioWebhookRouter.get("/recording-playback/:callId", async (req: Request, res: Response) => {
+  const callId = String(req.params.callId || "").trim();
+  if (!callId) return res.status(400).send("Missing callId");
+
+  const call = await fetchCallForExport(callId);
+  const recordingUrl = (call?.recording_url || "").trim();
+  if (!recordingUrl) return res.status(404).send("Recording not found");
+
+  const audio = await fetchTwilioRecordingAudio(recordingUrl);
+  if (!audio.ok) return res.status(audio.status).send("Failed to fetch recording");
+
+  res.setHeader("Content-Type", audio.contentType);
+  res.setHeader("Content-Disposition", `inline; filename="themis-recording-${callId}.mp3"`);
+  res.setHeader("Cache-Control", "private, max-age=3600");
+  return res.send(audio.body);
 });
 
 /**

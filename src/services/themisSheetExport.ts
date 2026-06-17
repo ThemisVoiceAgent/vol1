@@ -5,6 +5,7 @@ import {
   recordingCellRange,
   updateSheetRange,
 } from "./googleSheets.js";
+import { publicRecordingPlaybackUrl } from "./recordingPlayback.js";
 import { fetchCampaignCallByCallId } from "../themis-intra/campaignRepo.js";
 import {
   fetchCallForExport,
@@ -261,7 +262,7 @@ export async function exportThemisCallToSheet(params: ThemisSheetExportParams): 
     classification.wantedHuman ? "Y" : "N",
     buildSummaryCell(reached, classification),
     formattedTranscript,
-    (call.recording_url || "").trim(),
+    publicRecordingPlaybackUrl(callId),
   ];
 
   const result = await appendSheetRow([row]);
@@ -298,7 +299,10 @@ export async function maybeUpdateThemisSheetRecording(callSid: string, recording
   const cellRange = recordingCellRange(existing.row_range);
   if (!cellRange) return;
 
-  const upd = await updateSheetRange(cellRange, recordingUrl);
+  const playbackUrl = publicRecordingPlaybackUrl(callId);
+  if (!playbackUrl) return;
+
+  const upd = await updateSheetRange(cellRange, playbackUrl);
   if (upd.ok) {
     console.log(`[ThemisSheets] recording updated callId=${callId} range=${cellRange}`);
   } else {
