@@ -2071,6 +2071,45 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
     clearResponseDoneFallbackTimer();
   };
 
+  /** Themis outbound post-greeting barge-in: caller may interrupt assistant mid-sentence. */
+  const themisOutboundBargeInEnabled = () =>
+    callDirection === "outbound" &&
+    !greetingInProgress &&
+    initialGreetingResponseFinished &&
+    !antiBargeinEnabled &&
+    liveTurnSettings.interrupt_response === true;
+
+  /**
+   * Stop active assistant playback so the caller's interruption is handled.
+   * Outbound + post-greeting only; does not affect initial greeting protection.
+   */
+  const interruptActiveAssistantForBargeIn = (source: string): boolean => {
+    if (!themisOutboundBargeInEnabled() || !assistantPlaybackProtected()) return false;
+
+    const interruptedResponseId = activeResponseId;
+    console.log(
+      `[BargeIn] interrupt source=${source} callId=${callId} responseId=${interruptedResponseId || "none"} aiSpeaking=${aiIsSpeaking} mark=${responsePlaybackMarkName || "none"}`
+    );
+
+    if (openaiWs && openaiWs.readyState === WebSocket.OPEN && interruptedResponseId) {
+      try {
+        openaiWs.send(JSON.stringify({ type: "response.cancel" }));
+        console.log(`[BargeIn] response.cancel sent responseId=${interruptedResponseId} callId=${callId}`);
+      } catch (err) {
+        console.error(`[BargeIn] response.cancel failed callId=${callId}`, err);
+      }
+    }
+
+    if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
+      twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
+    }
+
+    resetResponseState();
+    aiIsSpeaking = false;
+    ignoreAudioUntilNextResponse = false;
+    return true;
+  };
+
   const sendGaSessionUpdate = (reason: string, fields: Record<string, unknown>) => {
     if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) return;
     const session = buildGaSessionPatch(fields);
@@ -3479,6 +3518,18 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
               aiIsSpeaking = false;
               console.warn(`[Diag-InboundTurn] response.cancelled received; sending recovery response seq=${pending.transcriptSeq} failedResponseId=${pending.failedResponseId || "none"} reason=${pending.reason} (callId=${callId})`);
               completeInboundTranscriptRecovery(pending.reason, pending.transcriptText, pending.transcriptSeq);
+              break;
+            }
+            if (
+              callDirection === "outbound" &&
+              themisOutboundBargeInEnabled() &&
+              responseId &&
+              (responseId === activeResponseId || assistantPlaybackProtected())
+            ) {
+              console.log(`[BargeIn] response.cancelled responseId=${responseId} callId=${callId}`);
+              resetResponseState();
+              aiIsSpeaking = false;
+              ignoreAudioUntilNextResponse = false;
             }
             break;
           }
@@ -5028,6 +5079,9 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
             }
             armCallerSpeechWatchdog("speech-started");
             console.log(`[MediaStream] Speech started (callId=${callId}, responseId=${activeResponseId})`);
+            if (interruptActiveAssistantForBargeIn("speech_started")) {
+              break;
+            }
             if (streamSid && twilioWs.readyState === WebSocket.OPEN && assistantPlaybackProtected()) {
               aiIsSpeaking = false;
               twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
