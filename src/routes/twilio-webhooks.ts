@@ -31,7 +31,8 @@ type CallBySidRow = {
   direction: string | null;
   to_number: string | null;
   from_number: string | null;
-  answered_at: string | null;
+  /** Optional: not present in every calls schema. Treated as undefined when absent. */
+  answered_at?: string | null;
 };
 
 type CampaignCallDebtRow = {
@@ -56,9 +57,11 @@ function restHeaders(): Record<string, string> | null {
 async function fetchCallBySid(callSid: string): Promise<CallBySidRow | null> {
   const headers = restHeaders();
   if (!headers || !callSid) return null;
+  // NOTE: answered_at is intentionally NOT selected — some calls schemas (prod)
+  // do not have that column, and selecting a missing column fails the whole query.
   const q =
     `/calls?twilio_call_sid=eq.${encodeURIComponent(callSid)}` +
-    `&select=id,campaign_id,direction,to_number,from_number,answered_at&limit=1`;
+    `&select=id,campaign_id,direction,to_number,from_number&limit=1`;
   try {
     const res = await fetch(`${restBase()}${q}`, { method: "GET", headers });
     if (!res.ok) {

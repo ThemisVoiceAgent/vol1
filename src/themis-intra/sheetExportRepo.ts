@@ -98,7 +98,8 @@ export type CallExportRow = {
   status: string | null;
   started_at: string | null;
   ended_at: string | null;
-  answered_at: string | null;
+  /** Optional: not present in every calls schema. Treated as undefined when absent. */
+  answered_at?: string | null;
   duration_seconds: number | null;
   transcript: string | null;
   recording_url: string | null;
@@ -107,9 +108,11 @@ export type CallExportRow = {
 export async function fetchCallForExport(callId: string): Promise<CallExportRow | null> {
   const h = authHeaders();
   if (!h || !callId) return null;
+  // NOTE: answered_at is intentionally NOT selected — some calls schemas (prod)
+  // do not have that column, and selecting a missing column fails the whole query.
   const q =
     `/calls?id=eq.${encodeURIComponent(callId)}` +
-    `&select=id,twilio_call_sid,campaign_id,direction,status,started_at,ended_at,answered_at,duration_seconds,transcript,recording_url&limit=1`;
+    `&select=id,twilio_call_sid,campaign_id,direction,status,started_at,ended_at,duration_seconds,transcript,recording_url&limit=1`;
   try {
     const res = await fetch(`${restBase()}${q}`, { method: "GET", headers: h });
     if (!res.ok) return null;

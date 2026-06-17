@@ -87,7 +87,7 @@ function parseVars(raw: unknown): Record<string, string> {
 }
 
 function wasCallReached(
-  call: { answered_at: string | null; duration_seconds: number | null; status: string | null },
+  call: { answered_at?: string | null; duration_seconds: number | null; status: string | null },
   opts?: { forceNotReached?: boolean; forceReached?: boolean }
 ): boolean {
   if (opts?.forceNotReached) return false;
