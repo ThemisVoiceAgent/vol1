@@ -151,11 +151,6 @@ async function maybeSendThemisPostCallSms(params: {
   }
 
   const durationSeconds = parseInt(String(callDurationRaw || "0"), 10);
-  const wasAnswered = Boolean(callRow.answered_at) || (Number.isFinite(durationSeconds) && durationSeconds > 0);
-  if (!wasAnswered) {
-    console.log(`[TwilioStatusSMS] skip: completed without answered proof callId=${callRow.id} callSid=${callSid}`);
-    return;
-  }
 
   const recipient = (callRow.to_number || "").trim();
   if (!recipient) {
