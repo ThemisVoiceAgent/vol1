@@ -126,7 +126,7 @@ export async function startOutboundCall(
     From: fromNumber,
     Url: voiceUrl,
     StatusCallback: statusUrl,
-    StatusCallbackEvent: "initiated ringing answered completed",
+    StatusCallbackEvent: "initiated ringing answered completed busy no-answer failed canceled",
     StatusCallbackMethod: "POST",
     Timeout: String(maxRingTime),
   };
