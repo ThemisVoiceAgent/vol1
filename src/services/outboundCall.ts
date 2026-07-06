@@ -71,7 +71,9 @@ export async function startOutboundCall(
     ? `&bridgeSelfTest=${encodeURIComponent(bridge_self_test)}`
     : "";
   const voiceUrl = `${config.publicBaseUrl}/twilio/voice?callId=${callId}&agentId=${agent_id}${campaign_id ? `&campaignId=${encodeURIComponent(campaign_id)}` : ""}${variablesParam}${bridgeSelfTestParam}`;
-  const statusUrl = `${config.publicBaseUrl}/twilio/status`;
+  // Use Flask proxy for Twilio webhooks (Twilio can't reach Railway directly)
+  const webhookBase = "https://flask.api.themis.ee";
+  const statusUrl = `${webhookBase}/twilio/status`;
 
   let enableRecording = true;
   let maxRingTime = 60;
