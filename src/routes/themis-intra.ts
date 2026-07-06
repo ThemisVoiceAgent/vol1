@@ -15,7 +15,7 @@ import {
 import { buildCallVariables } from "../themis-intra/mapClientVariables.js";
 import { applyThemisVariableAliases } from "../themis-intra/applyCallContext.js";
 import { buildStatisticsFromCallsOnly, buildStatisticsRows } from "../themis-intra/buildStatistics.js";
-import { processDueThemisRetries } from "../themis-intra/retry.js";
+import { processDueThemisRetries, scheduleThemisRetryIfNeeded, THEMIS_NOT_PICKED_UP_STATUSES } from "../themis-intra/retry.js";
 import { renderThemisPostCallSmsBody, sendThemisPostCallSms, THEMIS_POST_CALL_SMS_TEMPLATE } from "../services/themisPostCallSms.js";
 import type { IntraCampaignClient, StartCampaignRequestBody } from "../themis-intra/types.js";
 
@@ -186,12 +186,23 @@ themisIntraRouter.post("/start_calls_campaign_api", requireThemisApiToken, async
         if (!debtAmount) return;
 
         const smsBody = renderThemisPostCallSmsBody(debtAmount);
-        const result = await sendThemisPostCallSms({ to: recipient, body: smsBody });
+        const smsResult = await sendThemisPostCallSms({ to: recipient, body: smsBody });
         
-        if (result.ok) {
-          console.log(`[ThemisAutoSMS] sent via ${result.provider} to ${recipient} for ${twilioCallSid}`);
+        if (smsResult.ok) {
+          console.log(`[ThemisAutoSMS] sent via ${smsResult.provider} to ${recipient} for ${twilioCallSid}`);
         } else {
-          console.warn(`[ThemisAutoSMS] FAILED ${twilioCallSid}: ${result.error}`);
+          console.warn(`[ThemisAutoSMS] FAILED ${twilioCallSid}: ${smsResult.error}`);
+        }
+
+        // Also schedule retry if call was not picked up
+        if (THEMIS_NOT_PICKED_UP_STATUSES.has(data.status)) {
+          const retryResult = await scheduleThemisRetryIfNeeded({
+            callId,
+            reason: `auto_poll_${data.status}`,
+          });
+          if (retryResult.scheduled) {
+            console.log(`[ThemisAuto] retry scheduled for callId=${callId}`);
+          }
         }
       } catch (err) {
         console.error(`[ThemisAutoSMS] error:`, err);
