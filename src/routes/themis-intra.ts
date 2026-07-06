@@ -16,6 +16,7 @@ import { buildCallVariables } from "../themis-intra/mapClientVariables.js";
 import { applyThemisVariableAliases } from "../themis-intra/applyCallContext.js";
 import { buildStatisticsFromCallsOnly, buildStatisticsRows } from "../themis-intra/buildStatistics.js";
 import { processDueThemisRetries } from "../themis-intra/retry.js";
+import { renderThemisPostCallSmsBody, sendThemisPostCallSms, THEMIS_POST_CALL_SMS_TEMPLATE } from "../services/themisPostCallSms.js";
 import type { IntraCampaignClient, StartCampaignRequestBody } from "../themis-intra/types.js";
 
 export const themisIntraRouter = Router();
@@ -164,6 +165,38 @@ themisIntraRouter.post("/start_calls_campaign_api", requireThemisApiToken, async
       twilio_call_sid: result.twilio_call_sid,
       from_number: result.from_number,
     });
+
+    // Auto-poll: check call status after it should have ended and send SMS if needed.
+    // Fix 2026-07-06: bypasses Twilio webhook not-working issue.
+    const pollDelayMs = 75_000;
+    const twilioCallSid = result.twilio_call_sid;
+    setTimeout(async () => {
+      try {
+        const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${config.twilio.accountSid}/Calls/${twilioCallSid}.json`;
+        const auth = Buffer.from(`${config.twilio.accountSid}:${config.twilio.authToken}`).toString("base64");
+        const resp = await fetch(twilioUrl, { headers: { Authorization: *** ${auth}` } });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        
+        const endedStatuses = new Set(["completed", "busy", "no-answer", "canceled", "failed"]);
+        if (!endedStatuses.has(data.status)) return;
+
+        const recipient = data.to || phone;
+        const debtAmount = String(client.claim_remain || "").trim() || "0";
+        if (!debtAmount) return;
+
+        const smsBody = renderThemisPostCallSmsBody(debtAmount);
+        const result = await sendThemisPostCallSms({ to: recipient, body: smsBody });
+        
+        if (result.ok) {
+          console.log(`[ThemisAutoSMS] sent via ${result.provider} to ${recipient} for ${twilioCallSid}`);
+        } else {
+          console.warn(`[ThemisAutoSMS] FAILED ${twilioCallSid}: ${result.error}`);
+        }
+      } catch (err) {
+        console.error(`[ThemisAutoSMS] error:`, err);
+      }
+    }, pollDelayMs);
   }
 
   return res.json({
