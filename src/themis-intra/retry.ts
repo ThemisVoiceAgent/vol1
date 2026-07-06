@@ -15,18 +15,18 @@ import {
 /** Twilio terminal statuses that mean the debtor never picked up. */
 export const THEMIS_NOT_PICKED_UP_STATUSES = new Set(["no-answer", "busy", "failed", "canceled"]);
 
-const FIVE_HOURS_MINUTES = 5 * 60;
+const RETRY_DELAY_MINUTES = 4 * 60;
 
 /**
- * Retry delay in minutes. Defaults to exactly 5 hours (300 min). A dev/test
+ * Retry delay in minutes. Defaults to exactly 4 hours (240 min). A dev/test
  * override is honored ONLY when THEMIS_RETRY_DELAY_MINUTES is explicitly set to
- * a positive number; production leaves it unset → exact +5h.
+ * a positive number; production leaves it unset → exact +4h.
  */
 function retryDelayMinutes(): number {
   const raw = process.env.THEMIS_RETRY_DELAY_MINUTES;
-  if (raw === undefined || raw === null || String(raw).trim() === "") return FIVE_HOURS_MINUTES;
+  if (raw === undefined || raw === null || String(raw).trim() === "") return RETRY_DELAY_MINUTES;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return FIVE_HOURS_MINUTES;
+  if (!Number.isFinite(n) || n <= 0) return RETRY_DELAY_MINUTES;
   return n;
 }
 
