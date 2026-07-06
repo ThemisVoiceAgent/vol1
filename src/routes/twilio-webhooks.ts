@@ -133,7 +133,9 @@ async function maybeSendThemisPostCallSms(params: {
   callDurationRaw: unknown;
 }): Promise<void> {
   const { correlationId, callSid, normalizedStatus, callDurationRaw } = params;
-  if (normalizedStatus !== "completed") return;
+  // Send SMS for all terminal statuses (answered, not-answered, busy, failed, canceled)
+  const terminalStatuses = new Set(["completed", "no-answer", "busy", "canceled", "failed"]);
+  if (!terminalStatuses.has(normalizedStatus)) return;
 
   const callRow = await fetchCallBySid(callSid);
   if (!callRow) {
