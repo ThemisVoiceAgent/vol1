@@ -110,6 +110,7 @@ themisIntraRouter.post("/start_calls_campaign_api", requireThemisApiToken, async
       twilio_call_sid: null,
       from_number: null,
       voice: selectedVoice,
+      attempt_number: 1,
       call_variables: variables,
     });
 
