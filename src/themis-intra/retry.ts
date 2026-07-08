@@ -15,7 +15,7 @@ import {
 /** Twilio terminal statuses that mean the debtor never picked up. */
 export const THEMIS_NOT_PICKED_UP_STATUSES = new Set(["no-answer", "busy", "failed", "canceled"]);
 
-const RETRY_DELAY_MINUTES = 4 * 60;
+const RETRY_DELAY_MINUTES = 5;
 
 /**
  * Retry delay in minutes. Defaults to exactly 4 hours (240 min). A dev/test
