@@ -167,35 +167,51 @@ themisIntraRouter.post("/start_calls_campaign_api", requireThemisApiToken, async
       from_number: result.from_number,
     });
 
-    // Auto-poll: check call status after it should have ended and send SMS if needed.
+    // Auto-poll: repeatedly check call status until terminal, then send SMS and schedule retry if needed.
     // Fix 2026-07-06: bypasses Twilio webhook not-working issue.
-    const pollDelayMs = 75_000;
+    // Fix 2026-07-08: repeated polling — handles calls that last >75s.
     const twilioCallSid = result.twilio_call_sid;
-    setTimeout(async () => {
+    const maxPolls = 6;       // 6 × 30s = 3 minutes total
+    let pollCount = 0;
+
+    async function pollCallStatus(): Promise<void> {
+      pollCount += 1;
       try {
         const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${config.twilio.accountSid}/Calls/${twilioCallSid}.json`;
         const auth = Buffer.from(`${config.twilio.accountSid}:${config.twilio.authToken}`).toString("base64");
-        const resp = await fetch(twilioUrl, { headers: { Authorization: *** ${auth}` } });
-        if (!resp.ok) return;
+        const resp = await fetch(twilioUrl, { headers: { Authorization: `Basic ${auth}` } });
+        if (!resp.ok) {
+          if (pollCount < maxPolls) {
+            setTimeout(pollCallStatus, 30_000);
+          }
+          return;
+        }
         const data = await resp.json();
-        
+
         const endedStatuses = new Set(["completed", "busy", "no-answer", "canceled", "failed"]);
-        if (!endedStatuses.has(data.status)) return;
-
-        const recipient = data.to || phone;
-        const debtAmount = String(client.claim_remain || "").trim() || "0";
-        if (!debtAmount) return;
-
-        const smsBody = renderThemisPostCallSmsBody(debtAmount);
-        const smsResult = await sendThemisPostCallSms({ to: recipient, body: smsBody });
-        
-        if (smsResult.ok) {
-          console.log(`[ThemisAutoSMS] sent via ${smsResult.provider} to ${recipient} for ${twilioCallSid}`);
-        } else {
-          console.warn(`[ThemisAutoSMS] FAILED ${twilioCallSid}: ${smsResult.error}`);
+        if (!endedStatuses.has(data.status)) {
+          // Call still in progress — poll again if we haven't hit the limit
+          if (pollCount < maxPolls) {
+            setTimeout(pollCallStatus, 30_000);
+          }
+          return;
         }
 
-        // Also schedule retry if call was not picked up
+        // --- Call has ended (terminal status) ---
+        const recipient = data.to || phone;
+        const debtAmount = String(client.claim_remain || "").trim() || "0";
+        if (debtAmount) {
+          const smsBody = renderThemisPostCallSmsBody(debtAmount);
+          const smsResult = await sendThemisPostCallSms({ to: recipient, body: smsBody });
+
+          if (smsResult.ok) {
+            console.log(`[ThemisAutoSMS] sent via ${smsResult.provider} to ${recipient} for ${twilioCallSid}`);
+          } else {
+            console.warn(`[ThemisAutoSMS] FAILED ${twilioCallSid}: ${smsResult.error}`);
+          }
+        }
+
+        // Schedule retry if call was not picked up
         if (THEMIS_NOT_PICKED_UP_STATUSES.has(data.status)) {
           const retryResult = await scheduleThemisRetryIfNeeded({
             callId,
@@ -207,8 +223,14 @@ themisIntraRouter.post("/start_calls_campaign_api", requireThemisApiToken, async
         }
       } catch (err) {
         console.error(`[ThemisAutoSMS] error:`, err);
+        if (pollCount < maxPolls) {
+          setTimeout(pollCallStatus, 30_000);
+        }
       }
-    }, pollDelayMs);
+    }
+
+    // Start first poll after initial delay (75s)
+    setTimeout(pollCallStatus, 75_000);
   }
 
   return res.json({
