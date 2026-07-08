@@ -5,6 +5,8 @@ import {
   fetchCampaignCallByCallId,
   scheduleCampaignRetry,
   fetchDueCampaignRetries,
+  fetchCallsByIds,
+  fetchCallsNeedingRetrySchedule,
   claimCampaignRetry,
   insertCampaignCall,
   updateCampaignCallByCallId,
@@ -15,13 +17,11 @@ import {
 /** Twilio terminal statuses that mean the debtor never picked up. */
 export const THEMIS_NOT_PICKED_UP_STATUSES = new Set(["no-answer", "busy", "failed", "canceled"]);
 
-const RETRY_DELAY_MINUTES = 5;
-
 /**
- * Retry delay in minutes. Defaults to exactly 4 hours (240 min). A dev/test
- * override is honored ONLY when THEMIS_RETRY_DELAY_MINUTES is explicitly set to
- * a positive number; production leaves it unset → exact +4h.
+ * Retry delay in minutes. Defaults to 4 hours (240 min).
+ * For dev/test, set THEMIS_RETRY_DELAY_MINUTES=5 in Railway environment.
  */
+const RETRY_DELAY_MINUTES = 240;
 function retryDelayMinutes(): number {
   const raw = process.env.THEMIS_RETRY_DELAY_MINUTES;
   if (raw === undefined || raw === null || String(raw).trim() === "") return RETRY_DELAY_MINUTES;
@@ -235,4 +235,45 @@ export async function processDueThemisRetries(
     `[ThemisRetry] process complete due=${summary.due} started=${summary.started} failed=${summary.failed} skipped=${summary.skipped} correlationId=${correlationId}`
   );
   return summary;
+}
+
+/**
+ * Safety net: find calls where retry was never scheduled (auto-poll or webhook
+ * both missed), check if the Twilio call ended with a not-picked-up status,
+ * and schedule a retry. Called periodically from the setInterval in index.ts.
+ */
+export async function scheduleMissedRetries(correlationId: string): Promise<number> {
+  const rows = await fetchCallsNeedingRetrySchedule(3);
+  if (rows.length === 0) return 0;
+
+  const callIds = rows.map((r) => r.call_id).filter(Boolean);
+  const callsById = await fetchCallsByIds(callIds);
+  if (callsById.size === 0) return 0;
+
+  let scheduled = 0;
+  for (const row of rows) {
+    const callRecord = callsById.get(row.call_id);
+    if (!callRecord?.status) continue;
+
+    if (THEMIS_NOT_PICKED_UP_STATUSES.has(callRecord.status)) {
+      const result = await scheduleThemisRetryIfNeeded({
+        callId: row.call_id,
+        reason: `missed_${callRecord.status}`,
+        correlationId,
+      });
+      if (result.scheduled) {
+        scheduled += 1;
+        console.log(
+          `[ThemisRetry] missed retry recovered callId=${row.call_id} origCallId=${row.original_call_id || "—"} status=${callRecord.status}`
+        );
+      }
+    }
+  }
+
+  if (scheduled > 0) {
+    console.log(
+      `[ThemisRetry] scheduleMissedRetries recovered ${scheduled} of ${rows.length} candidates correlationId=${correlationId}`
+    );
+  }
+  return scheduled;
 }

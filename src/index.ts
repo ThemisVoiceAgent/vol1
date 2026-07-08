@@ -10,7 +10,7 @@ import { locationRouter } from "./routes/location.js";
 import { formsRouter } from "./routes/forms.js";
 import { agentBrainRouter } from "./routes/agentBrain.js";
 import { themisIntraRouter } from "./routes/themis-intra.js";
-import { processDueThemisRetries } from "./themis-intra/retry.js";
+import { processDueThemisRetries, scheduleMissedRetries } from "./themis-intra/retry.js";
 import { handleTwilioMediaStream } from "./ws/media-stream.js";
 
 const app = express();
@@ -69,6 +69,9 @@ server.listen(config.port, () => {
       if (result.due > 0) {
         console.log(`[AutoRetry] processed ${result.due} retries, started ${result.started}`);
       }
+      // Safety net: find calls where auto-poll (75s) or webhook missed
+      // scheduling the retry and schedule them if they ended not-picked-up.
+      await scheduleMissedRetries(`auto_missed_${Date.now()}`);
     } catch (err) {
       console.error("[AutoRetry] error:", err);
     }

@@ -203,7 +203,7 @@ export async function scheduleCampaignRetry(
   if (!h || !callId) return 0;
   const q =
     `/themis_campaign_calls?call_id=eq.${encodeURIComponent(callId)}` +
-    `&attempt_number=lt.2&retry_status=is.null`;
+    `&or=(attempt_number.lt.2,attempt_number.is.null)&retry_status=is.null`;
   try {
     const res = await fetch(`${restBase()}${q}`, {
       method: "PATCH",
@@ -243,6 +243,37 @@ export async function fetchDueCampaignRetries(nowIso: string, limit = 25): Promi
     return (await res.json()) as CampaignCallRow[];
   } catch (err) {
     console.warn(`[ThemisRetry] fetchDueCampaignRetries error`, err);
+    return [];
+  }
+}
+
+/**
+ * Find first-attempt campaign calls that were started (have twilio_call_sid)
+ * and are old enough to have ended, but have no retry_status set yet.
+ * These are "orphaned" calls where the auto-poll (75s) or Twilio webhook
+ * failed to schedule a retry. Used by scheduleMissedRetries() as a safety net.
+ */
+export async function fetchCallsNeedingRetrySchedule(
+  olderThanMinutes = 3
+): Promise<CampaignCallRow[]> {
+  const h = authHeaders();
+  if (!h) return [];
+  const cutoff = new Date(Date.now() - olderThanMinutes * 60_000).toISOString();
+  const q =
+    `/themis_campaign_calls?retry_status=is.null` +
+    `&or=(attempt_number.eq.1,attempt_number.is.null)` +
+    `&twilio_call_sid=not.is.null` +
+    `&created_at=lt.${encodeURIComponent(cutoff)}` +
+    `&select=*&limit=50`;
+  try {
+    const res = await fetch(`${restBase()}${q}`, { method: "GET", headers: h });
+    if (!res.ok) {
+      console.warn(`[ThemisRetry] fetchCallsNeedingRetrySchedule HTTP ${res.status}`, await res.text());
+      return [];
+    }
+    return (await res.json()) as CampaignCallRow[];
+  } catch (err) {
+    console.warn(`[ThemisRetry] fetchCallsNeedingRetrySchedule error`, err);
     return [];
   }
 }
