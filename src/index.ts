@@ -10,6 +10,7 @@ import { locationRouter } from "./routes/location.js";
 import { formsRouter } from "./routes/forms.js";
 import { agentBrainRouter } from "./routes/agentBrain.js";
 import { themisIntraRouter } from "./routes/themis-intra.js";
+import { processDueThemisRetries } from "./themis-intra/retry.js";
 import { handleTwilioMediaStream } from "./ws/media-stream.js";
 
 const app = express();
@@ -60,4 +61,17 @@ server.listen(config.port, () => {
   console.log(`   TwilioVoice: ${deployment.expectedTwilioVoiceWebhook}`);
   console.log(`   TwilioWS:    ${deployment.expectedTwilioStreamUrl}`);
   console.log(`   WS path:     /twilio/stream\n`);
+
+  // Auto-process retries every 5 minutes
+  setInterval(async () => {
+    try {
+      const result = await processDueThemisRetries(`auto_${Date.now()}`);
+      if (result.due > 0) {
+        console.log(`[AutoRetry] processed ${result.due} retries, started ${result.started}`);
+      }
+    } catch (err) {
+      console.error("[AutoRetry] error:", err);
+    }
+  }, 5 * 60 * 1000);
+  console.log(`   AutoRetry:  ✅ every 5 minutes`);
 });
