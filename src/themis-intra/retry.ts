@@ -196,6 +196,7 @@ export async function processDueThemisRetries(
         campaign_id: String(row.campaign_id),
         call_id: newCallId,
         variables: twilioVariables,
+        skip_schedule_check: true,
       },
       `${correlationId}-retry-${row.fk_task_id || "client"}`
     );

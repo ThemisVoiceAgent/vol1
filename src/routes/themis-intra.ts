@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import { config } from "../config.js";
-import { upsertCall } from "../supabase.js";
+import { upsertCall, updateCallBySid } from "../supabase.js";
 import { startOutboundCall } from "../services/outboundCall.js";
 import { requireThemisApiToken } from "../themis-intra/auth.js";
 import { firstValidPhone } from "../themis-intra/phone.js";
@@ -200,6 +200,17 @@ themisIntraRouter.post("/start_calls_campaign_api", requireThemisApiToken, async
         // --- Call has ended (terminal status) ---
         const recipient = data.to || phone;
         const debtAmount = String(client.claim_remain || "").trim() || "0";
+
+        // Update the calls table so the safety net (scheduleMissedRetries)
+        // can detect missed retries even if the Twilio webhook doesn't fire.
+        await updateCallBySid(twilioCallSid, {
+          status: data.status,
+          ended_at: data.endTime ? new Date(data.endTime).toISOString() : new Date().toISOString(),
+          duration_seconds: data.duration ? parseInt(String(data.duration), 10) : null,
+        }).catch((err: unknown) =>
+          console.warn(`[ThemisAuto] updateCallBySid error:`, err)
+        );
+
         if (debtAmount) {
           const smsBody = renderThemisPostCallSmsBody(debtAmount);
           const smsResult = await sendThemisPostCallSms({ to: recipient, body: smsBody });
