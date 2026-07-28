@@ -11,6 +11,8 @@ healthRouter.get("/health", (_req, res) => {
     service: "orchestrator",
     version: "1.0.0",
     uptime: process.uptime(),
+    publicBaseUrl: config.publicBaseUrl || "(not set)",
+    twilioFrom: config.twilio.fromNumber || "(not set)",
     providers: {
       twilio: {
         configured: config.twilio.isConfigured,
