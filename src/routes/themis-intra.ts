@@ -129,6 +129,7 @@ themisIntraRouter.post("/start_calls_campaign_api", requireThemisApiToken, async
         campaign_id: String(campaignId),
         call_id: callId,
         variables: twilioVariables,
+        skip_schedule_check: true,
       },
       `${correlationId}-${client.fk_task_id || "client"}`
     );
