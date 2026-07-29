@@ -30,6 +30,17 @@ function parseCampaignIdParam(raw: unknown): number | "all" | null {
   return Math.floor(n);
 }
 
+function firstValidPhone(raw: unknown): string | null {
+  if (raw === undefined || raw === null || raw === "") return null;
+  const s = String(raw).trim();
+  if (s.toLowerCase() === "all") return "all";
+  // If it looks like a phone number (starts with + or contains digits), return as-is
+  if (/^\+?\d[\d\s\-().]{6,}$/.test(s)) return s;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return String(Math.floor(n));
+}
+
 function getClientPhone(client: IntraCampaignClient): string | null {
   const raw = client.deptor_phone || client.debtor_phone;
   return firstValidPhone(raw);
