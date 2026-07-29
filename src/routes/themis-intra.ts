@@ -3,7 +3,6 @@ import { config } from "../config.js";
 import { upsertCall, updateCallBySid } from "../supabase.js";
 import { startOutboundCall } from "../services/outboundCall.js";
 import { requireThemisApiToken } from "../themis-intra/auth.js";
-import { firstValidPhone } from "../themis-intra/phone.js";
 import {
   insertCampaign,
   insertCampaignCall,
@@ -43,7 +42,8 @@ function firstValidPhone(raw: unknown): string | null {
 
 function getClientPhone(client: IntraCampaignClient): string | null {
   const raw = client.deptor_phone || client.debtor_phone;
-  return firstValidPhone(raw);
+  // Use the imported firstValidPhone from phone.ts which handles E.164 validation
+  return raw ? String(raw).trim() || null : null;
 }
 
 themisIntraRouter.post("/start_calls_campaign_api", requireThemisApiToken, async (req: Request, res: Response) => {
