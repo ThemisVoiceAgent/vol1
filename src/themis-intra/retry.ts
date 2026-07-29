@@ -21,7 +21,7 @@ export const THEMIS_NOT_PICKED_UP_STATUSES = new Set(["no-answer", "busy", "fail
  * Retry delay in minutes. Defaults to 4 hours (240 min).
  * For dev/test, set THEMIS_RETRY_DELAY_MINUTES=5 in Railway environment.
  */
-const RETRY_DELAY_MINUTES = 2;
+const RETRY_DELAY_MINUTES = 240;
 function retryDelayMinutes(): number {
   const raw = process.env.THEMIS_RETRY_DELAY_MINUTES;
   if (raw === undefined || raw === null || String(raw).trim() === "") return RETRY_DELAY_MINUTES;
