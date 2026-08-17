@@ -169,7 +169,7 @@ export async function fetchCallsByIds(callIds: string[]): Promise<Map<string, Ca
   const inList = unique.map((id) => encodeURIComponent(id)).join(",");
   const q =
     `/calls?id=in.(${inList})` +
-    `&select=id,twilio_call_sid,campaign_id,to_number,from_number,status,started_at,ended_at,answered_at,duration_seconds,transcript,summary,recording_url`;
+    `&select=id,twilio_call_sid,campaign_id,to_number,from_number,status,started_at,ended_at,duration_seconds,transcript,summary,recording_url`;
 
   try {
     const res = await fetch(`${restBase()}${q}`, { method: "GET", headers: h });
@@ -332,7 +332,7 @@ export async function fetchCallsByCampaignId(campaignId: number | "all", limit =
   if (!h) return [];
 
   let q =
-    `/calls?select=id,twilio_call_sid,campaign_id,to_number,from_number,status,started_at,ended_at,answered_at,duration_seconds,transcript,summary,recording_url` +
+    `/calls?select=id,twilio_call_sid,campaign_id,to_number,from_number,status,started_at,ended_at,duration_seconds,transcript,summary,recording_url` +
     `&order=started_at.desc&limit=${limit}`;
   if (campaignId !== "all") {
     q += `&campaign_id=eq.${encodeURIComponent(String(campaignId))}`;
