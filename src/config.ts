@@ -10,6 +10,8 @@ export const config = {
     accountSid: process.env.TWILIO_ACCOUNT_SID || "",
     authToken: process.env.TWILIO_AUTH_TOKEN || "",
     fromNumber: process.env.TWILIO_FROM_NUMBER || "",
+    fromNumberLandline: process.env.TWILIO_FROM_NUMBER_LANDLINE || "",
+    fromNumberFi: process.env.TWILIO_FROM_NUMBER_FI || "",
     get isConfigured() {
       return !!(this.accountSid && this.authToken && this.fromNumber);
     },

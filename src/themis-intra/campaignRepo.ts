@@ -190,7 +190,7 @@ export async function fetchCallsByIds(callIds: string[]): Promise<Map<string, Ca
 
 /**
  * Guarded scheduling of a single +5h retry. PostgREST only patches rows that
- * still match (attempt_number < 2 AND retry_status IS NULL), so a second
+ * still match (attempt_number < 3 AND retry_status IS NULL), so a second
  * not-picked-up callback for the same call updates nothing and never
  * double-schedules. Returns the number of rows actually scheduled (0 or 1).
  */
@@ -203,7 +203,7 @@ export async function scheduleCampaignRetry(
   if (!h || !callId) return 0;
   const q =
     `/themis_campaign_calls?call_id=eq.${encodeURIComponent(callId)}` +
-    `&or=(attempt_number.lt.2,attempt_number.is.null)&retry_status=is.null`;
+    `&or=(attempt_number.lt.3,attempt_number.is.null)&retry_status=is.null`;
   try {
     const res = await fetch(`${restBase()}${q}`, {
       method: "PATCH",

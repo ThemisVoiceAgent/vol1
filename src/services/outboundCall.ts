@@ -12,6 +12,8 @@ export interface StartOutboundCallParams {
   skip_schedule_check?: boolean;
   /** Pre-assigned call id (Intra writes DB context before Twilio dials). */
   call_id?: string;
+  /** Override the outbound caller-ID (used by retry rotation). */
+  from_number_override?: string;
 }
 
 export type StartOutboundCallResult =
@@ -60,7 +62,7 @@ export async function startOutboundCall(
     };
   }
 
-  const { to_number, agent_id, campaign_id, variables, bridge_self_test, skip_schedule_check, call_id } = params;
+  const { to_number, agent_id, campaign_id, variables, bridge_self_test, skip_schedule_check, call_id, from_number_override } = params;
 
   const callId = call_id || crypto.randomUUID();
   const variablesParam =
@@ -113,6 +115,19 @@ export async function startOutboundCall(
     } else {
       console.warn(
         `[${correlationId}] Agent phone_number "${agentConfig.phone_number}" failed E.164 validation, falling back to env`
+      );
+    }
+  }
+
+  // Retry rotation: override caller-ID if provided
+  if (from_number_override) {
+    const cleaned = String(from_number_override).replace(/[^\d+]/g, "");
+    const e164 = cleaned.startsWith("+") ? cleaned : `+${cleaned.replace(/^\+*/, "")}`;
+    if (/^\+\d{8,15}$/.test(e164)) {
+      fromNumber = e164;
+    } else {
+      console.warn(
+        `[${correlationId}] from_number_override "${from_number_override}" failed E.164 validation, ignoring`
       );
     }
   }

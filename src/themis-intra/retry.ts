@@ -14,6 +14,20 @@ import {
   type CampaignCallRow,
 } from "./campaignRepo.js";
 
+/** Max retry attempts. Attempt 1 = initial, attempt 2 = first retry, attempt 3 = second retry. */
+const MAX_ATTEMPT = 3;
+
+/** Select caller-ID based on attempt number. */
+function callerIdForAttempt(attempt: number): string {
+  if (attempt >= 3 && config.twilio.fromNumberFi) {
+    return config.twilio.fromNumberFi;
+  }
+  if (attempt >= 2 && config.twilio.fromNumberLandline) {
+    return config.twilio.fromNumberLandline;
+  }
+  return config.twilio.fromNumber;
+}
+
 /** Twilio terminal statuses that mean the debtor never picked up. */
 export const THEMIS_NOT_PICKED_UP_STATUSES = new Set(["no-answer", "busy", "failed", "canceled"]);
 
@@ -52,7 +66,7 @@ function parseVariables(raw: unknown): Record<string, string> {
 /**
  * Schedule exactly one secondary call +5h after the original attempt time for a
  * not-picked-up Themis outbound call. Idempotent and safe to call repeatedly:
- * the DB guard (attempt_number < 2 AND retry_status IS NULL) prevents
+ * the DB guard (attempt_number < 3 AND retry_status IS NULL) prevents
  * double-scheduling and prevents scheduling on attempt-2 rows.
  */
 export async function scheduleThemisRetryIfNeeded(params: {
@@ -68,7 +82,7 @@ export async function scheduleThemisRetryIfNeeded(params: {
     return { scheduled: false, reason: "not_campaign_call" };
   }
 
-  if ((row.attempt_number ?? 1) >= 2) {
+  if ((row.attempt_number ?? 1) >= MAX_ATTEMPT) {
     console.log(`[ThemisRetry] skip: already a retry attempt callId=${callId} attempt=${row.attempt_number}`);
     return { scheduled: false, reason: "already_retry_attempt" };
   }
@@ -158,12 +172,13 @@ export async function processDueThemisRetries(
     }
 
     const newCallId = crypto.randomUUID();
+    const nextAttempt = (row.attempt_number ?? 1) + 1;
 
     console.log(
-      `[ThemisRetry] starting retry originalCallId=${originalCallId} attempt=2 phone=${phone} correlationId=${correlationId}`
+      `[ThemisRetry] starting retry originalCallId=${originalCallId} attempt=${nextAttempt} phone=${phone} correlationId=${correlationId}`
     );
 
-    // Reserve the attempt-2 row before dialing (unique index on original_call_id
+    // Reserve the next-attempt row before dialing (unique index on original_call_id
     // is a hard guard against any duplicate retry row).
     const inserted = await insertCampaignCall({
       campaign_id: row.campaign_id,
@@ -176,7 +191,7 @@ export async function processDueThemisRetries(
       from_number: null,
       voice: row.voice ?? null,
       call_variables: variables,
-      attempt_number: 2,
+      attempt_number: nextAttempt,
       original_call_id: originalCallId,
     } as CampaignCallRow);
 
@@ -188,6 +203,7 @@ export async function processDueThemisRetries(
     }
 
     const twilioVariables = buildRetryTwilioVariables(row.campaign_id, variables);
+    const fromOverride = callerIdForAttempt(nextAttempt);
 
     const result = await startOutboundCall(
       {
@@ -197,6 +213,7 @@ export async function processDueThemisRetries(
         call_id: newCallId,
         variables: twilioVariables,
         skip_schedule_check: true,
+        from_number_override: fromOverride,
       },
       `${correlationId}-retry-${row.fk_task_id || "client"}`
     );
