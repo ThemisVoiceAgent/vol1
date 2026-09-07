@@ -86,177 +86,12 @@ themisIntraRouter.post("/start_calls_campaign_api", requireThemisApiToken, async
     callback_url: callbackUrl || null,
   });
 
-  let acceptedCount = 0;
-  const correlationId = crypto.randomUUID();
-
-  for (const client of clients) {
-    const phone = getClientPhone(client);
-    if (!phone) {
-      console.log("[ThemisIntra] client skipped (no valid phone)", {
-        fk_task_id: client.fk_task_id,
-      });
-      continue;
-    }
-
-    const variables = buildCallVariables(client, campaignId, selectedVoice);
-    applyThemisVariableAliases(variables);
-    console.log("[ThemisIntra] mapped_variables", {
-      fk_task_id: variables.fk_task_id,
-      client_name: variables.client_name,
-      debt_amount: variables.debt_amount,
-      last_income_date: variables.last_income_date,
-      campaign_id: variables.campaign_id,
-    });
-
-    const callId = crypto.randomUUID();
-
-    // Persist before Twilio dials so media-stream can load context (Stream params are ~256 chars).
-    await insertCampaignCall({
-      campaign_id: campaignId,
-      call_id: callId,
-      fk_task_id: client.fk_task_id ? String(client.fk_task_id) : null,
-      client_name: client.name ? String(client.name) : null,
-      phone,
-      debt_amount: client.claim_remain != null ? String(client.claim_remain) : null,
-      twilio_call_sid: null,
-      from_number: null,
-      voice: selectedVoice,
-      attempt_number: 1,
-      call_variables: variables,
-    });
-
-    const twilioVariables = {
-      intra_campaign: "true",
-      campaign_id: String(campaignId),
-      fk_task_id: variables.fk_task_id || "",
-      client_name: variables.client_name || "",
-      debt_amount: variables.debt_amount || "",
-    };
-
-    const result = await startOutboundCall(
-      {
-        to_number: phone,
-        agent_id: agentId,
-        campaign_id: String(campaignId),
-        call_id: callId,
-        variables: twilioVariables,
-        skip_schedule_check: true,
-      },
-      `${correlationId}-${client.fk_task_id || "client"}`
-    );
-
-    if (!result.ok) {
-      console.warn("[ThemisIntra] outbound call failed", {
-        fk_task_id: client.fk_task_id,
-        error: result.error,
-        status: result.status,
-      });
-      continue;
-    }
-
-    console.log("[ThemisIntra] client accepted", { fk_task_id: client.fk_task_id, phone });
-    console.log("[ThemisIntra] outbound call started", {
-      call_id: result.call_id,
-      twilio_call_sid: result.twilio_call_sid,
-      campaign_id: campaignId,
-    });
-
-    acceptedCount += 1;
-
-    await upsertCall(result.call_id, {
-      twilio_call_sid: result.twilio_call_sid,
-      agent_id: agentId,
-      campaign_id: String(campaignId),
-      to_number: phone,
-      from_number: result.from_number,
-      status: "initiated",
-      direction: "outbound",
-      started_at: new Date().toISOString(),
-    });
-
-    await updateCampaignCallByCallId(callId, {
-      twilio_call_sid: result.twilio_call_sid,
-      from_number: result.from_number,
-    });
-
-    // Auto-poll: repeatedly check call status until terminal, then send SMS and schedule retry if needed.
-    // Fix 2026-07-06: bypasses Twilio webhook not-working issue.
-    // Fix 2026-07-08: repeated polling — handles calls that last >75s.
-    const twilioCallSid = result.twilio_call_sid;
-    const maxPolls = 6;       // 6 × 30s = 3 minutes total
-    let pollCount = 0;
-
-    async function pollCallStatus(): Promise<void> {
-      pollCount += 1;
-      try {
-        const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${config.twilio.accountSid}/Calls/${twilioCallSid}.json`;
-        const auth = Buffer.from(`${config.twilio.accountSid}:${config.twilio.authToken}`).toString("base64");
-        const resp = await fetch(twilioUrl, { headers: { Authorization: `Basic ${auth}` } });
-        if (!resp.ok) {
-          if (pollCount < maxPolls) {
-            setTimeout(pollCallStatus, 30_000);
-          }
-          return;
-        }
-        const data = await resp.json();
-
-        const endedStatuses = new Set(["completed", "busy", "no-answer", "canceled", "failed"]);
-        if (!endedStatuses.has(data.status)) {
-          // Call still in progress — poll again if we haven't hit the limit
-          if (pollCount < maxPolls) {
-            setTimeout(pollCallStatus, 30_000);
-          }
-          return;
-        }
-
-        // --- Call has ended (terminal status) ---
-        const recipient = data.to || phone;
-        const debtAmount = String(client.claim_remain || "").trim() || "0";
-
-        // Update the calls table so the safety net (scheduleMissedRetries)
-        // can detect missed retries even if the Twilio webhook doesn't fire.
-        await updateCallBySid(twilioCallSid, {
-          status: data.status,
-          ended_at: data.endTime ? new Date(data.endTime).toISOString() : new Date().toISOString(),
-          duration_seconds: data.duration ? parseInt(String(data.duration), 10) : null,
-        }).catch((err: unknown) =>
-          console.warn(`[ThemisAuto] updateCallBySid error:`, err)
-        );
-
-        if (debtAmount) {
-          const smsBody = renderThemisPostCallSmsBody(debtAmount);
-          const smsResult = await sendThemisPostCallSms({ to: recipient, body: smsBody });
-
-          if (smsResult.ok) {
-            console.log(`[ThemisAutoSMS] sent via ${smsResult.provider} to ${recipient} for ${twilioCallSid}`);
-          } else {
-            console.warn(`[ThemisAutoSMS] FAILED ${twilioCallSid}: ${smsResult.error}`);
-          }
-        }
-
-        // Schedule retry if call was not picked up
-        if (THEMIS_NOT_PICKED_UP_STATUSES.has(data.status)) {
-          const retryResult = await scheduleThemisRetryIfNeeded({
-            callId,
-            reason: `auto_poll_${data.status}`,
-          });
-          if (retryResult.scheduled) {
-            console.log(`[ThemisAuto] retry scheduled for callId=${callId}`);
-          }
-        }
-      } catch (err) {
-        console.error(`[ThemisAutoSMS] error:`, err);
-        if (pollCount < maxPolls) {
-          setTimeout(pollCallStatus, 30_000);
-        }
-      }
-    }
-
-    // Start first poll after initial delay (75s)
-    setTimeout(pollCallStatus, 75_000);
-  }
-
-  return res.json({
+  // 5331 fix 2026-09-06: respond IMMEDIATELY with the campaign id. Intra's performRobotCallRequest()
+  // has no CURLOPT_TIMEOUT and the Zone proxy cuts the connection at ~90s; dialing 119 clients
+  // sequentially takes ~90.4s, so the response was lost and fk_campaign_id was stored as 0.
+  // Intra parses only status + data.campaign_id (ClaimAmounts.php), so returning before dialing is safe.
+  // accepted_clients_count is 0 at this point by design (dialing happens in background).
+  res.json({
     status: "success",
     message: "Campaign started successfully!",
     data: {
@@ -264,9 +99,189 @@ themisIntraRouter.post("/start_calls_campaign_api", requireThemisApiToken, async
       voice: selectedVoice,
       callback_url_registered: !!callbackUrl,
       received_clients_count: clients.length,
-      accepted_clients_count: acceptedCount,
+      accepted_clients_count: 0,
+      dialing_mode: "background",
     },
   });
+
+  // Background dial loop — same sequential steps, same per-client error handling as before.
+  void (async () => {
+    try {
+      let acceptedCount = 0;
+      const correlationId = crypto.randomUUID();
+
+      for (const client of clients) {
+        const phone = getClientPhone(client);
+        if (!phone) {
+          console.log("[ThemisIntra] client skipped (no valid phone)", {
+            fk_task_id: client.fk_task_id,
+          });
+          continue;
+        }
+
+        const variables = buildCallVariables(client, campaignId, selectedVoice);
+        applyThemisVariableAliases(variables);
+        console.log("[ThemisIntra] mapped_variables", {
+          fk_task_id: variables.fk_task_id,
+          client_name: variables.client_name,
+          debt_amount: variables.debt_amount,
+          last_income_date: variables.last_income_date,
+          campaign_id: variables.campaign_id,
+        });
+
+        const callId = crypto.randomUUID();
+
+        // Persist before Twilio dials so media-stream can load context (Stream params are ~256 chars).
+        await insertCampaignCall({
+          campaign_id: campaignId,
+          call_id: callId,
+          fk_task_id: client.fk_task_id ? String(client.fk_task_id) : null,
+          client_name: client.name ? String(client.name) : null,
+          phone,
+          debt_amount: client.claim_remain != null ? String(client.claim_remain) : null,
+          twilio_call_sid: null,
+          from_number: null,
+          voice: selectedVoice,
+          attempt_number: 1,
+          call_variables: variables,
+        });
+
+        const twilioVariables = {
+          intra_campaign: "true",
+          campaign_id: String(campaignId),
+          fk_task_id: variables.fk_task_id || "",
+          client_name: variables.client_name || "",
+          debt_amount: variables.debt_amount || "",
+        };
+
+        const result = await startOutboundCall(
+          {
+            to_number: phone,
+            agent_id: agentId,
+            campaign_id: String(campaignId),
+            call_id: callId,
+            variables: twilioVariables,
+            skip_schedule_check: true,
+          },
+          `${correlationId}-${client.fk_task_id || "client"}`
+        );
+
+        if (!result.ok) {
+          console.warn("[ThemisIntra] outbound call failed", {
+            fk_task_id: client.fk_task_id,
+            error: result.error,
+            status: result.status,
+          });
+          continue;
+        }
+
+        console.log("[ThemisIntra] client accepted", { fk_task_id: client.fk_task_id, phone });
+        console.log("[ThemisIntra] outbound call started", {
+          call_id: result.call_id,
+          twilio_call_sid: result.twilio_call_sid,
+          campaign_id: campaignId,
+        });
+
+        acceptedCount += 1;
+
+        await upsertCall(result.call_id, {
+          twilio_call_sid: result.twilio_call_sid,
+          agent_id: agentId,
+          campaign_id: String(campaignId),
+          to_number: phone,
+          from_number: result.from_number,
+          status: "initiated",
+          direction: "outbound",
+          started_at: new Date().toISOString(),
+        });
+
+        await updateCampaignCallByCallId(callId, {
+          twilio_call_sid: result.twilio_call_sid,
+          from_number: result.from_number,
+        });
+
+        // Auto-poll: repeatedly check call status until terminal, then send SMS and schedule retry if needed.
+        // Fix 2026-07-06: bypasses Twilio webhook not-working issue.
+        // Fix 2026-07-08: repeated polling — handles calls that last >75s.
+        const twilioCallSid = result.twilio_call_sid;
+        const maxPolls = 6;       // 6 × 30s = 3 minutes total
+        let pollCount = 0;
+
+        async function pollCallStatus(): Promise<void> {
+          pollCount += 1;
+          try {
+            const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${config.twilio.accountSid}/Calls/${twilioCallSid}.json`;
+            const auth = Buffer.from(`${config.twilio.accountSid}:${config.twilio.authToken}`).toString("base64");
+            const resp = await fetch(twilioUrl, { headers: { Authorization: `Basic ${auth}` } });
+            if (!resp.ok) {
+              if (pollCount < maxPolls) {
+                setTimeout(pollCallStatus, 30_000);
+              }
+              return;
+            }
+            const data = await resp.json();
+
+            const endedStatuses = new Set(["completed", "busy", "no-answer", "canceled", "failed"]);
+            if (!endedStatuses.has(data.status)) {
+              // Call still in progress — poll again if we haven't hit the limit
+              if (pollCount < maxPolls) {
+                setTimeout(pollCallStatus, 30_000);
+              }
+              return;
+            }
+
+            // --- Call has ended (terminal status) ---
+            const recipient = data.to || phone;
+            const debtAmount = String(client.claim_remain || "").trim() || "0";
+
+            // Update the calls table so the safety net (scheduleMissedRetries)
+            // can detect missed retries even if the Twilio webhook doesn't fire.
+            await updateCallBySid(twilioCallSid, {
+              status: data.status,
+              ended_at: data.endTime ? new Date(data.endTime).toISOString() : new Date().toISOString(),
+              duration_seconds: data.duration ? parseInt(String(data.duration), 10) : null,
+            }).catch((err: unknown) =>
+              console.warn(`[ThemisAuto] updateCallBySid error:`, err)
+            );
+
+            if (debtAmount) {
+              const smsBody = renderThemisPostCallSmsBody(debtAmount);
+              const smsResult = await sendThemisPostCallSms({ to: recipient, body: smsBody });
+
+              if (smsResult.ok) {
+                console.log(`[ThemisAutoSMS] sent via ${smsResult.provider} to ${recipient} for ${twilioCallSid}`);
+              } else {
+                console.warn(`[ThemisAutoSMS] FAILED ${twilioCallSid}: ${smsResult.error}`);
+              }
+            }
+
+            // Schedule retry if call was not picked up
+            if (THEMIS_NOT_PICKED_UP_STATUSES.has(data.status)) {
+              const retryResult = await scheduleThemisRetryIfNeeded({
+                callId,
+                reason: `auto_poll_${data.status}`,
+              });
+              if (retryResult.scheduled) {
+                console.log(`[ThemisAuto] retry scheduled for callId=${callId}`);
+              }
+            }
+          } catch (err) {
+            console.error(`[ThemisAutoSMS] error:`, err);
+            if (pollCount < maxPolls) {
+              setTimeout(pollCallStatus, 30_000);
+            }
+          }
+        }
+
+        // Start first poll after initial delay (75s)
+        setTimeout(pollCallStatus, 75_000);
+      }
+
+
+    } catch (bgErr) {
+      console.error("[ThemisIntra] background campaign dialing failed", { campaign_id: campaignId, error: bgErr });
+    }
+  })();
 });
 
 async function handleGetCampaignStatistics(
