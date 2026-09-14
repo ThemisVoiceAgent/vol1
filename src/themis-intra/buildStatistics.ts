@@ -2,6 +2,28 @@ import type { CampaignCallRow, CallRecordRow } from "./campaignRepo.js";
 import type { LegacyStatisticsRow } from "./types.js";
 import { formatLegacyCallDate, mapLegacyCallOutcome } from "./callResultMapper.js";
 
+/**
+ * Stable non-negative 31-bit int from a call id (FNV-1a), used as call_log_id
+ * when the themis_campaign_calls row id is not a plain integer. Intra stores
+ * call_log_id as INT PK — historic values are 5 digits (max observed 59720),
+ * so collisions between different call_ids are possible but unlikely at this scale.
+ */
+export function hashCallLogId(callId: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < callId.length; i++) {
+    hash ^= callId.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash & 0x7fffffff;
+}
+
+/** Return the row id as an integer when it is a plain integer string, else null. */
+function numericRowId(rowId: string | undefined | null): number | null {
+  if (!rowId || !/^\d+$/.test(rowId)) return null;
+  const n = Number(rowId);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
 export function buildStatisticsRows(
   campaignCalls: CampaignCallRow[],
   callsById: Map<string, CallRecordRow>,
@@ -24,6 +46,12 @@ export function buildStatisticsRows(
 
     rows.push({
       campaign_id: cc.campaign_id,
+      // Intra's saveCampaignDataById INSERTs (int)$value['call_log_id'] as the PK of
+      // robot_call_campaign_results — a missing key casts to 0 and collides. Use the
+      // themis_campaign_calls row id when it is a plain integer, else a stable hash
+      // fallback. (robot_calls_log ids only go up to ~236 and do not match this scale;
+      // nothing in Intra joins call_log_id to robot_calls_log.id.)
+      call_log_id: numericRowId(cc.id) ?? hashCallLogId(cc.call_id),
       fk_task_id: cc.fk_task_id || "",
       client_id: cc.fk_task_id || "",
       client_name: cc.client_name || "",
@@ -57,6 +85,7 @@ export function buildStatisticsFromCallsOnly(
     const { call_status, call_result } = mapLegacyCallOutcome(call.status);
     return {
       campaign_id: campaignId,
+      call_log_id: hashCallLogId(call.id),
       fk_task_id: "",
       client_id: "",
       client_name: "",

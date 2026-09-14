@@ -19,6 +19,8 @@ export interface StartCampaignRequestBody {
 
 export interface LegacyStatisticsRow {
   campaign_id: number;
+  /** PK Intra uses for robot_call_campaign_results (int cast of this value). */
+  call_log_id: number;
   fk_task_id: string;
   client_id: string;
   client_name: string;

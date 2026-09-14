@@ -10,6 +10,10 @@ import {
   fetchCampaignCalls,
   fetchCallsByIds,
   fetchCallsByCampaignId,
+  fetchAndPersistLiveCallStatus,
+  isTerminalCallStatus,
+  type CampaignCallRow,
+  type CallRecordRow,
 } from "../themis-intra/campaignRepo.js";
 import { buildCallVariables } from "../themis-intra/mapClientVariables.js";
 import { applyThemisVariableAliases } from "../themis-intra/applyCallContext.js";
@@ -204,7 +208,7 @@ themisIntraRouter.post("/start_calls_campaign_api", requireThemisApiToken, async
         // Fix 2026-07-06: bypasses Twilio webhook not-working issue.
         // Fix 2026-07-08: repeated polling — handles calls that last >75s.
         const twilioCallSid = result.twilio_call_sid;
-        const maxPolls = 6;       // 6 × 30s = 3 minutes total
+        const maxPolls = 8;       // 8 × 60s = 8 minutes total (Area B 2026-09-14: was 6 × 30s = 3 min, could miss long calls)
         let pollCount = 0;
 
         async function pollCallStatus(): Promise<void> {
@@ -225,7 +229,7 @@ themisIntraRouter.post("/start_calls_campaign_api", requireThemisApiToken, async
             if (!endedStatuses.has(data.status)) {
               // Call still in progress — poll again if we haven't hit the limit
               if (pollCount < maxPolls) {
-                setTimeout(pollCallStatus, 30_000);
+                setTimeout(pollCallStatus, 60_000);
               }
               return;
             }
@@ -268,7 +272,7 @@ themisIntraRouter.post("/start_calls_campaign_api", requireThemisApiToken, async
           } catch (err) {
             console.error(`[ThemisAutoSMS] error:`, err);
             if (pollCount < maxPolls) {
-              setTimeout(pollCallStatus, 30_000);
+              setTimeout(pollCallStatus, 60_000);
             }
           }
         }
@@ -283,6 +287,32 @@ themisIntraRouter.post("/start_calls_campaign_api", requireThemisApiToken, async
     }
   })();
 });
+
+/**
+ * Area B fix 2026-09-14: for campaign calls whose calls-table row is still
+ * non-terminal (auto-poll window and webhook both missed the call end), fetch
+ * the live Twilio status and persist it before the statistics payload is built.
+ * Mutates callsById in place so buildStatisticsRows renders the fresh values.
+ */
+export async function refreshNonTerminalCalls(
+  campaignCalls: CampaignCallRow[],
+  callsById: Map<string, CallRecordRow>
+): Promise<void> {
+  const stale = campaignCalls
+    .map((cc) => callsById.get(cc.call_id))
+    .filter((call): call is CallRecordRow =>
+      !!call && !!call.twilio_call_sid && !isTerminalCallStatus(call.status)
+    );
+  if (stale.length === 0) return;
+
+  console.log(`[ThemisIntra] stats: ${stale.length} non-terminal call(s) — fetching live Twilio status`);
+  for (const call of stale) {
+    const patch = await fetchAndPersistLiveCallStatus(call.twilio_call_sid!);
+    if (patch) {
+      Object.assign(call, patch);
+    }
+  }
+}
 
 async function handleGetCampaignStatistics(
   req: Request,
@@ -305,8 +335,12 @@ async function handleGetCampaignStatistics(
   let rows;
 
   if (campaignCalls.length > 0) {
-    const callIds = campaignCalls.map((c) => c.call_id).filter(Boolean);
-    const callsById = await fetchCallsByIds(callIds);
+    // Area B fix 2026-09-14: before rendering the summary, re-check calls whose
+    // DB row is still non-terminal against Twilio live status and persist the
+    // result. The auto-poll window and the webhook can both miss the call end,
+    // which used to leave call_length empty and call_result "unknown" in Intra.
+    const callsById = await fetchCallsByIds(campaignCalls.map((c) => c.call_id).filter(Boolean));
+    await refreshNonTerminalCalls(campaignCalls, callsById);
     rows = buildStatisticsRows(campaignCalls, callsById, campaignId);
   } else {
     const calls =

@@ -26,11 +26,24 @@ export function mapLegacyCallOutcome(dbStatus: string | null | undefined): {
   }
 }
 
-/** Format ISO timestamp as legacy "YYYY-MM-DD HH:mm:ss" (UTC). */
+const TZ_OPTIONS = {
+  timeZone: "Europe/Tallinn",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+} as const;
+
+/** Format ISO timestamp as legacy "YYYY-MM-DD HH:mm:ss" in Europe/Tallinn time (+03/+02 DST-aware). */
 export function formatLegacyCallDate(iso: string | null | undefined): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+  const parts = new Intl.DateTimeFormat("en-GB", TZ_OPTIONS).formatToParts(d);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+  const hour = get("hour") === "24" ? "00" : get("hour"); // en-GB midnight edge case
+  return `${get("year")}-${get("month")}-${get("day")} ${hour}:${get("minute")}:${get("second")}`;
 }

@@ -1,4 +1,5 @@
 import { config } from "../config.js";
+import { updateCallBySid } from "../supabase.js";
 
 export interface CampaignRow {
   campaign_id: number;
@@ -348,5 +349,45 @@ export async function fetchCallsByCampaignId(campaignId: number | "all", limit =
   } catch (err) {
     console.warn(`[ThemisIntra] fetchCallsByCampaignId error`, err);
     return [];
+  }
+}
+
+/** Call is terminal once it has one of these statuses (same set as the auto-poll in routes/themis-intra.ts). */
+const TERMINAL_CALL_STATUSES = new Set(["completed", "busy", "no-answer", "canceled", "failed"]);
+
+export function isTerminalCallStatus(status: string | null | undefined): boolean {
+  return !!status && TERMINAL_CALL_STATUSES.has(status.toLowerCase().trim());
+}
+
+/**
+ * Fetch the live call status from Twilio and persist it (calls table row + status/
+ * ended_at/duration_seconds) before statistics are rendered. Area B fix 2026-09-14:
+ * the auto-poll (75s + 8x60s) and the Twilio webhook can both still miss the call
+ * end, leaving duration_seconds empty and status non-terminal in the calls table —
+ * buildStatistics then renders call_length "" and call_result "unknown".
+ * Returns the persisted patch (or null when creds/SID missing or Twilio failed).
+ */
+export async function fetchAndPersistLiveCallStatus(twilioCallSid: string): Promise<Record<string, unknown> | null> {
+  if (!twilioCallSid || !config.twilio.accountSid || !config.twilio.authToken) return null;
+  try {
+    const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${config.twilio.accountSid}/Calls/${twilioCallSid}.json`;
+    const auth = Buffer.from(`${config.twilio.accountSid}:${config.twilio.authToken}`).toString("base64");
+    const resp = await fetch(twilioUrl, { headers: { Authorization: `Basic ${auth}` } });
+    if (!resp.ok) {
+      console.warn(`[ThemisIntra] fetchAndPersistLiveCallStatus HTTP ${resp.status} sid=${twilioCallSid}`);
+      return null;
+    }
+    const data = (await resp.json()) as { status?: string; endTime?: string; duration?: string | number };
+    if (!data.status || !TERMINAL_CALL_STATUSES.has(data.status)) return null;
+
+    const patch: Record<string, unknown> = { status: data.status };
+    if (data.endTime) patch.ended_at = new Date(data.endTime).toISOString();
+    if (data.duration != null) patch.duration_seconds = parseInt(String(data.duration), 10);
+
+    await updateCallBySid(twilioCallSid, patch);
+    return patch;
+  } catch (err) {
+    console.warn(`[ThemisIntra] fetchAndPersistLiveCallStatus error`, err);
+    return null;
   }
 }
