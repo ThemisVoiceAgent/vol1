@@ -74,7 +74,7 @@ export function appendThemisIntraContextBlock(
   ];
 
   const name = callVariables.client_name || callVariables.debtor_name || callVariables.first_name;
-  if (name) lines.push(`Debtor name (verify identity): ${name}`);
+  if (name) lines.push(`Debtor name: ${name}`);
 
   const amount = callVariables.debt_amount || callVariables.claim_remain;
   if (amount) lines.push(`Outstanding balance for this call ONLY: ${amount} EUR`);

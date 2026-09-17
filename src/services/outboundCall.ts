@@ -139,8 +139,12 @@ export async function startOutboundCall(
     To: to_number,
     From: fromNumber,
     Url: voiceUrl,
+    // Twilio Call-resource REST API: space-separated StatusCallbackEvent list,
+    // valid values = initiated ringing answered completed. Terminal statuses
+    // (busy/no-answer/failed/canceled) are NOT event values — they arrive via
+    // the completed event. Invalid values (not the space delimiter) triggered 21626.
     StatusCallback: statusUrl,
-    StatusCallbackEvent: "initiated ringing answered completed busy no-answer failed canceled",
+    StatusCallbackEvent: "initiated ringing answered completed",
     StatusCallbackMethod: "POST",
     Timeout: String(maxRingTime),
   };

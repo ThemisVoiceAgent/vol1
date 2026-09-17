@@ -20,7 +20,7 @@ export const config = {
   // OpenAI
   openai: {
     apiKey: process.env.OPENAI_API_KEY || "",
-    realtimeModel: process.env.OPENAI_REALTIME_MODEL || "gpt-4o-realtime-preview-2024-12-17",
+    realtimeModel: process.env.OPENAI_REALTIME_MODEL || "gpt-realtime-2.1",
     get isConfigured() {
       return !!this.apiKey;
     },

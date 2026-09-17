@@ -19,7 +19,8 @@ import { buildCallVariables } from "../themis-intra/mapClientVariables.js";
 import { applyThemisVariableAliases } from "../themis-intra/applyCallContext.js";
 import { buildStatisticsFromCallsOnly, buildStatisticsRows } from "../themis-intra/buildStatistics.js";
 import { processDueThemisRetries, scheduleThemisRetryIfNeeded, THEMIS_NOT_PICKED_UP_STATUSES } from "../themis-intra/retry.js";
-import { renderThemisPostCallSmsBody, sendThemisPostCallSms, THEMIS_POST_CALL_SMS_TEMPLATE } from "../services/themisPostCallSms.js";
+import { renderThemisPostCallSmsBody, sendThemisPostCallSms, THEMIS_POST_CALL_SMS_TEMPLATE, resolveThemisSmsProvider, resolveThemisSmsSender } from "../services/themisPostCallSms.js";
+import { hasSmsMessageForCallTemplate, insertSmsMessage, updateSmsMessageById } from "../services/twilioSms.js";
 import type { IntraCampaignClient, StartCampaignRequestBody } from "../themis-intra/types.js";
 
 export const themisIntraRouter = Router();
@@ -249,13 +250,55 @@ themisIntraRouter.post("/start_calls_campaign_api", requireThemisApiToken, async
             );
 
             if (debtAmount) {
-              const smsBody = renderThemisPostCallSmsBody(debtAmount);
-              const smsResult = await sendThemisPostCallSms({ to: recipient, body: smsBody });
-
-              if (smsResult.ok) {
-                console.log(`[ThemisAutoSMS] sent via ${smsResult.provider} to ${recipient} for ${twilioCallSid}`);
+              // G fix 2026-09-17 (5331): unify the auto-poll path with the webhook +
+              // media-stream finalizer senders. Root cause of SMS#1/SMS#2: this path sent
+              // directly with no sms_messages marker and no idempotency check, so a call
+              // terminated by BOTH the finalizer and auto-poll produced two identical SMS.
+              // Same contract as twilio-webhooks.ts + media-stream.ts:
+              //   guard (hasSmsMessageForCallTemplate) → marker insert (backstopped by
+              //   unique index uq_sms_messages_themis_post_call) → send → marker update.
+              const alreadySent = await hasSmsMessageForCallTemplate(callId, THEMIS_POST_CALL_SMS_TEMPLATE);
+              if (alreadySent === null) {
+                console.warn(`[ThemisAutoSMS] skip: idempotency check unavailable callId=${callId} callSid=${twilioCallSid}`);
+              } else if (alreadySent) {
+                console.log(`[ThemisAutoSMS] skip: already sent callId=${callId} callSid=${twilioCallSid}`);
               } else {
-                console.warn(`[ThemisAutoSMS] FAILED ${twilioCallSid}: ${smsResult.error}`);
+                const smsBody = renderThemisPostCallSmsBody(debtAmount);
+                const provider = resolveThemisSmsProvider();
+                const sender = resolveThemisSmsSender(provider);
+                const smsRowId = await insertSmsMessage({
+                  call_id: callId,
+                  agent_id: null,
+                  template_name: THEMIS_POST_CALL_SMS_TEMPLATE,
+                  direction: "outbound",
+                  from_number: sender,
+                  to_number: recipient,
+                  body: smsBody,
+                  twilio_sid: null,
+                  status: "queued",
+                  ...(provider === "messente" ? { provider, sender_name: sender } : {}),
+                });
+                if (!smsRowId) {
+                  console.warn(`[ThemisAutoSMS] skip: failed to persist SMS marker callId=${callId} callSid=${twilioCallSid}`);
+                } else {
+                  const smsResult = await sendThemisPostCallSms({ to: recipient, body: smsBody });
+                  if (smsResult.ok) {
+                    const patch: Record<string, unknown> = { status: smsResult.status || "sent" };
+                    if (smsResult.provider === "messente") {
+                      patch.provider = "messente";
+                      patch.provider_message_id = smsResult.providerMessageId || null;
+                    } else {
+                      patch.twilio_sid = smsResult.providerMessageId || null;
+                    }
+                    await updateSmsMessageById(smsRowId, patch);
+                    console.log(`[ThemisAutoSMS] sent via ${smsResult.provider} to ${recipient} for ${twilioCallSid}`);
+                  } else {
+                    await updateSmsMessageById(smsRowId, {
+                      status: `failed:${smsResult.errorCode || "send"}`,
+                    });
+                    console.warn(`[ThemisAutoSMS] FAILED ${twilioCallSid}: ${smsResult.error}`);
+                  }
+                }
               }
             }
 
