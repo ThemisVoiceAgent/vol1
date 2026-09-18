@@ -118,6 +118,8 @@ async function startOutboundCall(params) {
   globalThis.__recorded.dials.push(params);
   return { ok: true, call_id: params.call_id, twilio_call_sid: "CA" + String(params.call_id).slice(0, 10), from_number: "stub-from" };
 }
+// 5331 fix 2026-09-18: retry path now registers the shared auto-poll; record instead of scheduling timers here
+function startThemisCallStatusAutoPoll(p) { (globalThis.__recorded.polls ||= []).push(p); }
 ${transpileFile("src/themis-intra/retry.ts", { stripImports: true })}
 `);
 const retryUrl = "file://" + retryPath;

@@ -203,7 +203,7 @@ const { config, Router, upsertCall, updateCallBySid, startOutboundCall, requireT
   insertCampaign, insertCampaignCall, updateCampaignCallByCallId, fetchCampaignCalls,
   fetchCallsByIds, fetchCallsByCampaignId, fetchAndPersistLiveCallStatus, isTerminalCallStatus,
   buildCallVariables, applyThemisVariableAliases, buildStatisticsFromCallsOnly, buildStatisticsRows,
-  processDueThemisRetries, scheduleThemisRetryIfNeeded, THEMIS_NOT_PICKED_UP_STATUSES } = shared;
+  processDueThemisRetries, scheduleThemisRetryIfNeeded, THEMIS_NOT_PICKED_UP_STATUSES, startThemisCallStatusAutoPoll } = shared;
 ` + src;
   writeFileSync(p, src);
   writeTmp("configStubPc.mjs", `const config = ${JSON.stringify(configStub)}; export { config };`);
@@ -279,6 +279,7 @@ const { config, Router, upsertCall, updateCallBySid, startOutboundCall, requireT
     export async function processDueThemisRetries() { return {}; }
     export async function scheduleThemisRetryIfNeeded() { return { scheduled: false, reason: "stub" }; }
     export const THEMIS_NOT_PICKED_UP_STATUSES = new Set(["busy", "no-answer", "canceled", "failed"]);
+    export function startThemisCallStatusAutoPoll(p) { (globalThis.__recorded.polls ||= []).push(p); }
   `);
 
   const mod = await import("file://" + intraPath);
@@ -350,7 +351,8 @@ const { config, Router, upsertCall, updateCallBySid, startOutboundCall, requireT
   check("G4b: no provider send and no marker for that call", !smsTable.some(r => r.call_id === CALL_ID3));
 
   // Scenario 5: source-level assertions — poll path is wired to the guarded sender
-  const intraSrc = readFileSync(path.join(ROOT, "src/routes/themis-intra.ts"), "utf8");
+  // 5331 fix 2026-09-18: poll body lives in themis-intra/callStatusPoll.ts (shared by attempt-1 + retry dials)
+  const intraSrc = readFileSync(path.join(ROOT, "src/themis-intra/callStatusPoll.ts"), "utf8");
   check("G5: poll path imports hasSmsMessageForCallTemplate + insertSmsMessage",
         intraSrc.includes("hasSmsMessageForCallTemplate") && intraSrc.includes("insertSmsMessage"));
   check("G5b: poll path inserts template marker before send",

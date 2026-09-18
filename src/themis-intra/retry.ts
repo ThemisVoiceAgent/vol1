@@ -1,6 +1,7 @@
 import { config } from "../config.js";
 import { upsertCall } from "../supabase.js";
 import { startOutboundCall } from "../services/outboundCall.js";
+import { startThemisCallStatusAutoPoll } from "./callStatusPoll.js";
 import {
   fetchCampaignCallByCallId,
   scheduleCampaignRetry,
@@ -241,6 +242,17 @@ export async function processDueThemisRetries(
     await updateCampaignCallByCallId(newCallId, {
       twilio_call_sid: result.twilio_call_sid,
       from_number: result.from_number,
+    });
+
+    // 5331 fix 2026-09-18: identical terminal-status write-back wiring as attempt-1 calls
+    // (routes/themis-intra.ts). Without this, retry-dialed calls stayed at status='initiated'
+    // forever (Twilio StatusCallback never fires — error 21626 on every call), so no
+    // post-call SMS and no attempt-3 scheduling for attempt-2 rows.
+    startThemisCallStatusAutoPoll({
+      callId: result.call_id,
+      twilioCallSid: result.twilio_call_sid,
+      phone,
+      debtAmountRaw: row.debt_amount ?? variables.debt_amount,
     });
 
     console.log(
