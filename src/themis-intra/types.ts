@@ -38,4 +38,12 @@ export interface LegacyStatisticsRow {
   call_summary: string;
   transcript: string;
   recording_url: string;
+  /** 5331 Phase-B: structured outcome fields (empty string when not reported). */
+  outcome?: string;
+  payment_promise_date?: string;
+  payment_promise_amount?: string;
+  /** 5331 Phase-B: claimant context from campaign-call variables (empty when absent). */
+  creditor_name?: string;
+  last_payment_date?: string;
+  attempt_number?: string;
 }

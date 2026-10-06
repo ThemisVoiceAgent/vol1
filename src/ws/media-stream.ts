@@ -758,6 +758,13 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
   let loadedAgentName = "(none)";
   let bridgeSelfTest = "";
   let callFinalized = false;
+  // 5331 Phase-B: structured outcome reported by the agent via the end_call tool, persisted at
+  // finalize. Shape: { outcome, payment_promise_date?, payment_promise_amount? } | null.
+  let endCallStructuredOutcome: {
+    outcome: string;
+    payment_promise_date?: string;
+    payment_promise_amount?: string;
+  } | null = null;
   let lastResponseCreateReason = "(none)";
   let activeResponseReason = "(none)";
   let activeResponseInboundTranscriptSeq = 0;
@@ -3218,8 +3225,30 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
                 type: "string",
                 description: "Brief reason for ending the call",
               },
+              outcome: {
+                type: "string",
+                enum: [
+                  "payment_promise",
+                  "payment_plan",
+                  "refusal",
+                  "dispute",
+                  "already_paid",
+                  "wrong_person",
+                  "callback_requested",
+                  "other_completed",
+                ],
+                description: "Structured outcome of the collection call. Choose the single best-matching value based on how the conversation actually ended.",
+              },
+              payment_promise_date: {
+                type: "string",
+                description: "The EXACT payment date the debtor explicitly confirmed, as YYYY-MM-DD. Only when outcome=payment_promise or payment_plan and the date was verbally confirmed by the debtor.",
+              },
+              payment_promise_amount: {
+                type: "string",
+                description: "The EXACT payment amount the debtor explicitly confirmed, as a number string (e.g. '2500.00'). Only when outcome=payment_promise or payment_plan and the amount was verbally confirmed.",
+              },
             },
-            required: ["reason"],
+            required: ["reason", "outcome"],
           },
         });
       }
@@ -3844,6 +3873,16 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
               try {
                 const args = JSON.parse(event.arguments);
                 reason = args.reason || reason;
+                // 5331 Phase-B: capture the structured outcome reported by the agent.
+                if (args && typeof args.outcome === "string" && args.outcome) {
+                  endCallStructuredOutcome = { outcome: args.outcome };
+                  if (typeof args.payment_promise_date === "string" && args.payment_promise_date.trim()) {
+                    endCallStructuredOutcome.payment_promise_date = args.payment_promise_date.trim();
+                  }
+                  if (typeof args.payment_promise_amount === "string" && args.payment_promise_amount.trim()) {
+                    endCallStructuredOutcome.payment_promise_amount = args.payment_promise_amount.trim();
+                  }
+                }
               } catch {}
               if (iiziDeterministicInbound()) {
                 const detState = iiziDetRef.current.currentState;
@@ -5313,6 +5352,9 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
       ended_at: endTime.toISOString(),
       duration_seconds: durationSeconds,
       transcript,
+      // 5331 Phase-B: persist the structured outcome reported by the agent (null-safe —
+      // calls.outcome is a jsonb column; historical rows keep outcome=null).
+      ...(endCallStructuredOutcome ? { outcome: endCallStructuredOutcome } : {}),
     });
 
     queueThemisSheetExportForAnsweredCall({

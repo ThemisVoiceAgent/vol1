@@ -59,6 +59,7 @@ export interface CallRecordRow {
   started_at: string | null;
   ended_at: string | null;
   answered_at: string | null;
+  outcome: { outcome?: string; payment_promise_date?: string; payment_promise_amount?: string } | null;
   duration_seconds: number | null;
   transcript: string | null;
   summary: string | null;
@@ -175,7 +176,7 @@ export async function fetchCallsByIds(callIds: string[]): Promise<Map<string, Ca
   // simply renders empty/null when absent.
   const q =
     `/calls?id=in.(${inList})` +
-    `&select=id,twilio_call_sid,campaign_id,to_number,from_number,status,started_at,ended_at,duration_seconds,transcript,summary,recording_url`;
+    `&select=id,twilio_call_sid,campaign_id,to_number,from_number,status,started_at,ended_at,duration_seconds,transcript,summary,recording_url,outcome`;
 
   try {
     const res = await fetch(`${restBase()}${q}`, { method: "GET", headers: h });
@@ -338,7 +339,7 @@ export async function fetchCallsByCampaignId(campaignId: number | "all", limit =
   if (!h) return [];
 
   let q =
-    `/calls?select=id,twilio_call_sid,campaign_id,to_number,from_number,status,started_at,ended_at,duration_seconds,transcript,summary,recording_url` +
+    `/calls?select=id,twilio_call_sid,campaign_id,to_number,from_number,status,started_at,ended_at,duration_seconds,transcript,summary,recording_url,outcome` +
     `&order=started_at.desc&limit=${limit}`;
   if (campaignId !== "all") {
     q += `&campaign_id=eq.${encodeURIComponent(String(campaignId))}`;

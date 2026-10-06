@@ -1,6 +1,6 @@
 import type { CampaignCallRow, CallRecordRow } from "./campaignRepo.js";
 import type { LegacyStatisticsRow } from "./types.js";
-import { formatLegacyCallDate, mapLegacyCallOutcome } from "./callResultMapper.js";
+import { formatLegacyCallDate, mapLegacyCallOutcome, resolveCallResult } from "./callResultMapper.js";
 
 /**
  * Stable non-negative 31-bit int from a call id (FNV-1a), used as call_log_id
@@ -37,7 +37,9 @@ export function buildStatisticsRows(
     const call = callsById.get(cc.call_id);
     const phone = cc.phone || call?.to_number || "";
     const fromNumber = cc.from_number || call?.from_number || "";
-    const { call_status, call_result } = mapLegacyCallOutcome(call?.status);
+    // 5331 Phase-B: structured outcome (calls.outcome) wins for completed calls; legacy
+    // statuses (no_answer/busy/failed) keep their legacy mapping untouched.
+    const { call_status, call_result } = resolveCallResult(call?.status, call?.outcome);
     const callDate =
       formatLegacyCallDate(call?.started_at) ||
       formatLegacyCallDate(cc.created_at) ||
@@ -69,6 +71,16 @@ export function buildStatisticsRows(
       call_summary: call?.summary || "",
       transcript: call?.transcript || "",
       recording_url: call?.recording_url || "",
+      // 5331 Phase-B: structured outcome + promise fields passed through when the agent
+      // reported them (LegacyStatisticsRow carries them as optional strings).
+      outcome: call?.outcome?.outcome || "",
+      payment_promise_date: call?.outcome?.payment_promise_date || "",
+      payment_promise_amount: call?.outcome?.payment_promise_amount || "",
+      // 5331 Phase-B: claimant context from the campaign-call variables when present
+      // (creditor = the client on whose behalf the claim is collected; never fabricated).
+      creditor_name: (cc.call_variables?.creditor_name as string) || "",
+      last_payment_date: (cc.call_variables?.last_income_date as string) || "",
+      attempt_number: cc.attempt_number != null ? String(cc.attempt_number) : "1",
     });
   }
 
@@ -82,7 +94,7 @@ export function buildStatisticsFromCallsOnly(
 ): LegacyStatisticsRow[] {
   return calls.map((call) => {
     const phone = call.to_number || "";
-    const { call_status, call_result } = mapLegacyCallOutcome(call.status);
+    const { call_status, call_result } = resolveCallResult(call.status, call.outcome);
     return {
       campaign_id: campaignId,
       call_log_id: hashCallLogId(call.id),
