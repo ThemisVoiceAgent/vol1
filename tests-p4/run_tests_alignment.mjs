@@ -35,20 +35,24 @@ const t = (name, cond) => { if (cond) { pass++; console.log(`  PASS ${name}`); }
   t("F4b no last payment -> absent", vars.last_payment_date === undefined && vars.days_since_last_payment === undefined);
 }
 
-// F5: WhatsApp gating (unit — the service file loaded with env off)
+// F5: WhatsApp gating (unit - env off by default)
 process.env.THEMIS_WHATSAPP_ENABLED = "";
-const { sendThemisPostCallWhatsapp, THEMIS_POST_CALL_WHATSAPP_TEMPLATE } = await import("../dist/services/themisPostCallWhatsapp.js");
+const wa = await import("../dist/services/themisPostCallWhatsapp.js");
+const sendThemisPostCallWhatsapp = wa.sendThemisPostCallWhatsapp;
+const THEMIS_POST_CALL_WHATSAPP_TEMPLATE = wa.THEMIS_POST_CALL_WHATSAPP_TEMPLATE;
+const getThemisWhatsappTemplateName = wa.getThemisWhatsappTemplateName;
 {
-  const r = await sendThemisPostCallWhatsapp({ callId: "x", to: "+3720000", body: "x" });
+  const r = await sendThemisPostCallWhatsapp({ callId: "x", to: "+3720000" });
   t("F5 whatsapp disabled by default (no sends)", r.ok === false && r.skippedReason === "disabled");
 }
-// F6: enabled but no copy -> no_send (never invent)
+// F6: enabled but no creds in test env -> clean no-send (never crash, never send)
 process.env.THEMIS_WHATSAPP_ENABLED = "true";
 {
-  const r = await sendThemisPostCallWhatsapp({ callId: "x", to: "+3720000", body: "  " });
-  t("F6 no_copy guard", r.ok === false && r.skippedReason === "no_copy");
+  const r = await sendThemisPostCallWhatsapp({ callId: "x", to: "+3720000" });
+  t("F6 enabled without creds -> clean no-send", r.ok === false);
 }
 t("F7 template key stable", THEMIS_POST_CALL_WHATSAPP_TEMPLATE === "themis_post_call_whatsapp_v1");
+t("F7b template name default", getThemisWhatsappTemplateName() === "teated_volgnikele_test");
 
 console.log(`========== ALIGNMENT RESULTS: PASS=${pass} FAIL=${fail} ==========`);
 process.exit(fail ? 1 : 0);

@@ -28,6 +28,7 @@ import {
   resolveThemisSmsSender,
   sendThemisPostCallSms,
 } from "../services/themisPostCallSms.js";
+import { sendThemisPostCallWhatsapp } from "../services/themisPostCallWhatsapp.js";
 import { queueThemisSheetExportForAnsweredCall } from "../services/themisSheetExport.js";
 import type { IiziShadowState } from "../flow/iiziShadowFlow.js";
 import {
@@ -473,6 +474,10 @@ const LIVE_FRONTEND_PROMPT = [
   "vasta ise. Kui andmed on teadmata, ütle ausalt, et kontrollid ja paku tagasihelistust —",
   "ära vaikige ega leiuta.",
   "Katkestus-politika: kui helistaja räägib vahele, lõpeta kohe rääkimine ja kuula.",
+  "LÕPETAMINE (kõrgeim prioriteet): niipea kui oled öelnud head päeva VÕI helistaja on",
+  "öelnud head päeva / hüvasti / tšau, KUTSU KOHE end_call tööriista. Ära ütle head päeva",
+  "mitu korda — üks viisakas hüvastilause + KOHE end_call. Jäta kõne mitte lõpetamata",
+  "on VEAD (helistaja jääb ootele).",
   "Lõpeta kõne end_call tööriistaga koos struktureeritud tulemusega (outcome + makslubaduse",
   "väljad), kui kõne eesmärk on saavutatud või jätkamine on mõtetu.",
 ].join("\n");
@@ -5524,6 +5529,23 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
     })().catch((err) => {
       console.error(`[ThemisSMS] skipped reason=exception callId=${callId}`, err);
     });
+
+    // 5331: post-call WhatsApp via Messente (template-based) — same exactly-once guard,
+    // fired alongside the SMS for every completed (answered) call (Henri 07.10).
+    if (callDirection !== "inbound") {
+      const waRecipient = calledNumber;
+      void (async () => {
+        const wa = await sendThemisPostCallWhatsapp({
+          callId,
+          to: waRecipient,
+        });
+        console.log(
+          `[ThemisWhatsApp] ${wa.ok ? "sent" : "skipped/failed"} reason=${wa.skippedReason || "-"} callId=${callId} providerMessageId=${wa.providerMessageId || "-"} error=${wa.error || "-"}`
+        );
+      })().catch((err) => {
+        console.error(`[ThemisWhatsApp] exception callId=${callId}`, err);
+      });
+    }
 
     // Run post-call analysis if we have a transcript and analysis prompt
     if (transcript && agentAnalysisPrompt) {

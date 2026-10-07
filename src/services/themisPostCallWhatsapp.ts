@@ -1,70 +1,65 @@
 /**
- * 5331 final alignment: Themis post-call WHATSAPP (plumbing only — copy/eligibility BLOCKED
- * pending a product decision; Henri 07.10 "do not invent legal/client-facing copy").
+ * 5331 — Themis post-call WHATSAPP v2 (Henri directive 07.10):
+ * "after each call, the WhatsApp message gets delivered through Messente as well".
  *
- * Uses the EXISTING Messente omnichannel integration (same omnimessage endpoint + credentials
- * as src/services/messenteSms.ts) with channel:"whatsapp". Same idempotency model as the
- * post-call SMS: template key "themis_post_call_whatsapp_v1" + hasSmsMessageForCallTemplate
- * (call_id+template_name unique) → at most ONE WhatsApp per qualifying call, idempotent
- * across webhook/finalizer/poller/restart.
+ * Channel = Messente omnichannel TEMPLATE WhatsApp (the existing Intra-approved template
+ * 'teated_volgnikele_test', language et, sender from messente_to_whatsapp config) — the SAME
+ * template the Intra reminder cron has historically used. Template-based sends work without
+ * a pre-approved free-text session (Messente delivers the approved template body).
  *
- * Env gating: THEMIS_WHATSAPP_ENABLED=true turns the flow on. Without it, the flow is a
- * no-op (plumbing deployed, zero production sends until content + eligibility are approved).
+ * Exactly-once: template key themis_post_call_whatsapp_v1 + hasSmsMessageForCallTemplate
+ * (call_id+template, DB unique) — fail-closed. Sent for EVERY completed (answered) call
+ * alongside the SMS (no extra eligibility filtering beyond the post-call SMS decision,
+ * per Henri: "each and every call").
  */
-
 import { insertSmsMessage, updateSmsMessageById, hasSmsMessageForCallTemplate } from "./twilioSms.js";
 
 const MESSENTE_OMNIMESSAGE_URL = "https://api.messente.com/v1/omnimessage";
 
 export const THEMIS_POST_CALL_WHATSAPP_TEMPLATE = "themis_post_call_whatsapp_v1";
 
-/** Product decision required before production sends. Logged, not sent. */
+/** Gating: env ON (Henri GO). Template name: env or the historical Intra test template. */
 export function isThemisWhatsappEnabled(): boolean {
   return (process.env.THEMIS_WHATSAPP_ENABLED || "").trim().toLowerCase() === "true";
+}
+export function getThemisWhatsappTemplateName(): string {
+  return (process.env.THEMIS_WHATSAPP_TEMPLATE || "teated_volgnikele_test").trim();
+}
+export function getThemisWhatsappSender(): string {
+  return (process.env.MESSENTE_WHATSAPP_SENDER || "themis.ee").trim();
 }
 
 export interface ThemisWhatsappResult {
   ok: boolean;
-  /** skipped_* = no send attempted (idempotency / disabled / missing product decision). */
   skippedReason?: "disabled" | "duplicate" | "no_copy" | "missing_recipient";
   providerMessageId?: string;
   error?: string;
 }
 
 /**
- * Sends the post-call WhatsApp via the existing Messente integration and stores the
- * provider result in sms_messages (channel=whatsapp) with the WhatsApp template key.
- * Exactly-once: the marker row is claimed FIRST (same claim-first pattern as SMS).
+ * TEMPLATE-based WhatsApp send through the existing Messente integration.
+ * Exactly-once: claim-first marker (same pattern as SMS) — one WhatsApp per qualifying call.
  */
 export async function sendThemisPostCallWhatsapp(params: {
   callId: string;
   campaignId?: number | null;
   to: string;
-  /** Text is REQUIRED by the caller — the service never invents copy. */
-  body: string;
+  /** Debt amount rendered into the template parameters (historical template has no vars —
+   *  kept for future templates; the approved template body is fixed on Messente side). */
+  debtAmount?: string;
 }): Promise<ThemisWhatsappResult> {
   if (!isThemisWhatsappEnabled()) {
     return { ok: false, skippedReason: "disabled" };
-  }
-  // Copy guard: empty body = no product copy approved → never send.
-  const body = (params.body || "").trim();
-  if (!body) {
-    console.warn(
-      `[ThemisWhatsApp] skipped reason=no_copy callId=${params.callId} — no approved WhatsApp copy (product decision pending)`,
-    );
-    return { ok: false, skippedReason: "no_copy" };
   }
   if (!params.to) {
     return { ok: false, skippedReason: "missing_recipient" };
   }
 
-  // Exactly-once claim (same guard as SMS).
   const already = await hasSmsMessageForCallTemplate(params.callId, THEMIS_POST_CALL_WHATSAPP_TEMPLATE);
   if (already === true) {
     return { ok: false, skippedReason: "duplicate" };
   }
   if (already === null) {
-    // Supabase unreachable — fail CLOSED (do not risk a duplicate send).
     return { ok: false, error: "dedup check unavailable (fail-closed)" };
   }
 
@@ -76,9 +71,21 @@ export async function sendThemisPostCallWhatsapp(params: {
 
   try {
     const auth = Buffer.from(`${username}:${password}`).toString("base64");
+    // Messente WhatsApp template message: sender + template name + language + body params.
+    // (Same structure the Intra MessenteWhatsApp.php builds via the PHP SDK.)
     const payload = {
       to: params.to,
-      messages: [{ channel: "whatsapp", text: body }],
+      messages: [
+        {
+          channel: "whatsapp",
+          sender: getThemisWhatsappSender(),
+          template: {
+            name: getThemisWhatsappTemplateName(),
+            language: "et",
+            components: [{ type: "body", parameters: [] }],
+          },
+        },
+      ],
     };
     const res = await fetch(MESSENTE_OMNIMESSAGE_URL, {
       method: "POST",
@@ -96,9 +103,10 @@ export async function sendThemisPostCallWhatsapp(params: {
     };
     const providerMessageId = data?.omnimessage_id || data?.messages?.[0]?.message_id || undefined;
     const ok = res.ok;
+    const errorText: string | undefined = ok
+      ? undefined
+      : data?.errors?.[0]?.detail || data?.errors?.[0]?.title || `HTTP ${res.status}`;
 
-    // Persist the provider result (same sms_messages table, provider=messente_whatsapp so
-    // delivery status is diagnosable; twilio_sid stays null for the WhatsApp channel).
     await insertSmsMessage({
       call_id: params.callId,
       agent_id: null,
@@ -106,15 +114,18 @@ export async function sendThemisPostCallWhatsapp(params: {
       direction: "outbound",
       from_number: "whatsapp",
       to_number: params.to,
-      body,
+      body: `[whatsapp template:${getThemisWhatsappTemplateName()}]`,
       twilio_sid: null,
       status: ok ? "sent" : "failed",
       provider: "messente_whatsapp",
       provider_message_id: providerMessageId || null,
-      sender_name: "whatsapp",
+      sender_name: getThemisWhatsappSender(),
     });
+    if (!ok) {
+      console.error(`[ThemisWhatsApp] send failed HTTP ${res.status} ${errorText || ""} callId=${params.callId}`);
+    }
 
-    return { ok, providerMessageId, error: ok ? undefined : `HTTP ${res.status}` };
+    return { ok, providerMessageId: providerMessageId || undefined, error: ok ? undefined : errorText };
   } catch (err: any) {
     return { ok: false, error: err?.message || "Messente WhatsApp send failed" };
   }
