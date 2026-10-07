@@ -8,6 +8,7 @@ import {
   resolveThemisSmsProvider,
   resolveThemisSmsSender,
 } from "../services/themisPostCallSms.js";
+import { sendThemisPostCallWhatsapp } from "../services/themisPostCallWhatsapp.js";
 import { hasSmsMessageForCallTemplate, insertSmsMessage, updateSmsMessageById } from "../services/twilioSms.js";
 
 /**
@@ -152,6 +153,22 @@ export function startThemisCallStatusAutoPoll(params: {
             }
           }
         }
+      }
+
+      // 5331 (Henri 07.10): WhatsApp ALSO goes out on unanswered calls - same exactly-once
+      // guard as the SMS above (claim-first marker + DB unique, fail-closed).
+      if (debtAmount && recipient) {
+        void (async () => {
+          const wa = await sendThemisPostCallWhatsapp({
+            callId,
+            to: recipient,
+          });
+          console.log(
+            `[ThemisWhatsApp] ${wa.ok ? "sent" : "skipped/failed"} reason=${wa.skippedReason || "-"} callId=${callId} providerMessageId=${wa.providerMessageId || "-"} error=${wa.error || "-"}`
+          );
+        })().catch((err) => {
+          console.error(`[ThemisWhatsApp] exception callId=${callId}`, err);
+        });
       }
 
       // Schedule retry if call was not picked up

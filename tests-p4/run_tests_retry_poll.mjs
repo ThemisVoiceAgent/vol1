@@ -62,7 +62,8 @@ const callsTable = [
 ];
 const smsTable = [];
 const twilioCalls = {}; // sid -> {status, endTime, duration, to}
-const recorded = { dials: [], sentSms: [], updateCallBySid: [] };
+const recorded = { dials: [], sentSms: [],
+    sentWhatsapp: [], updateCallBySid: [] };
 globalThis.__recorded = recorded;
 globalThis.__callsTable = callsTable;
 
@@ -203,6 +204,13 @@ writeTmp("themisPostCallSms.mjs", `
     return { ok: true, provider: "twilio", providerMessageId: "SM" + globalThis.__recorded.sentSms.length, status: "sent" };
   }
 `);
+writeTmp("themisPostCallWhatsapp.mjs", `
+  export const THEMIS_POST_CALL_WHATSAPP_TEMPLATE = "themis_post_call_whatsapp_v1";
+  export async function sendThemisPostCallWhatsapp(p) {
+    globalThis.__recorded.sentWhatsapp.push(p);
+    return { ok: true, providerMessageId: "WA" + globalThis.__recorded.sentWhatsapp.length };
+  }
+`);
 writeTmp("campaignRepo.mjs", transpileFile("src/themis-intra/campaignRepo.ts", { rewriteImports: { "../config.js": "./config.mjs", "../supabase.js": "./supabase.mjs" } }));
 writeTmp("twilioSms.mjs", transpileFile("src/services/twilioSms.ts", { rewriteImports: { "../config.js": "./config.mjs" } }));
 writeTmp("retry.mjs", transpileFile("src/themis-intra/retry.ts", { rewriteImports: {
@@ -211,7 +219,7 @@ writeTmp("retry.mjs", transpileFile("src/themis-intra/retry.ts", { rewriteImport
 } }));
 const pollPath = writeTmp("callStatusPoll.mjs", transpileFile("src/themis-intra/callStatusPoll.ts", { rewriteImports: {
   "../config.js": "./config.mjs", "../supabase.js": "./supabase.mjs", "./retry.js": "./retry.mjs",
-  "../services/themisPostCallSms.js": "./themisPostCallSms.mjs", "../services/twilioSms.js": "./twilioSms.mjs",
+  "../services/themisPostCallSms.js": "./themisPostCallSms.mjs", "../services/twilioSms.js": "./twilioSms.mjs","../services/themisPostCallWhatsapp.js": "./themisPostCallWhatsapp.mjs",
 } }));
 
 const retry = await import("file://" + path.join(TMP, "retry.mjs"));
