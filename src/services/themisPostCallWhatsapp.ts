@@ -63,10 +63,13 @@ export async function sendThemisPostCallWhatsapp(params: {
     return { ok: false, error: "dedup check unavailable (fail-closed)" };
   }
 
-  const username = process.env.MESSENTE_API_USERNAME || "";
-  const password = process.env.MESSENTE_API_PASSWORD || "";
+  // WhatsApp uses its OWN Messente credentials (the SMS account has no WhatsApp rights):
+  // MESSENTE_WHATSAPP_API_USERNAME/PASSWORD (from Intra messente_to_whatsapp config),
+  // falling back to the SMS credentials only if the dedicated pair is absent.
+  const username = process.env.MESSENTE_WHATSAPP_API_USERNAME || process.env.MESSENTE_API_USERNAME || "";
+  const password = process.env.MESSENTE_WHATSAPP_API_PASSWORD || process.env.MESSENTE_API_PASSWORD || "";
   if (!username || !password) {
-    return { ok: false, error: "Messente credentials missing (MESSENTE_API_USERNAME/PASSWORD)" };
+    return { ok: false, error: "Messente credentials missing (MESSENTE_WHATSAPP_API_USERNAME/PASSWORD or SMS fallback)" };
   }
 
   try {
