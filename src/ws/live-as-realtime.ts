@@ -40,6 +40,8 @@ export interface LiveAsRealtimeOptions {
     voice?: string;
     tools?: unknown[];
   };
+  /** Responses-delegation backend model (Live requires delegation for response.create). */
+  backendModel?: string;
   logger?: (msg: string) => void;
 }
 
@@ -143,17 +145,10 @@ export class LiveAsRealtimeSocket {
         break;
       }
       case "response.create": {
-        // Greeting/turn start: Live speaks when instructed. Forward the word-for-word
-        // greeting instructions as an instruction append.
-        const response = (msg.response || {}) as Record<string, unknown>;
-        const instructions = typeof response.instructions === "string" ? response.instructions : "";
-        if (instructions) {
-          this.rawSend({
-            type: "session.instructions.append",
-            event_id: `bridge_instr_${Date.now()}`,
-            instructions,
-          });
-        }
+        // 5331 Phase-E: greeting/turn start. session.instructions.append is a DELEGATION-side
+        // API (requires delegation_id) and does not drive speech — the opening line lives in
+        // the session.start instructions and the turn-kick (first input audio) starts the
+        // spoken turn. So response.create is absorbed here.
         break;
       }
       case "input_audio_buffer.append": {
@@ -245,11 +240,17 @@ export class LiveAsRealtimeSocket {
         output: { voice: opts.sessionConfig.voice || "ash" },
       },
     };
-    if (Array.isArray(opts.sessionConfig.tools) && opts.sessionConfig.tools.length > 0) {
-      session.delegation = {
-        responses: { tools: opts.sessionConfig.tools, tool_choice: "auto" },
-      };
-    }
+    // 5331 Phase-E: Live REQUIRES Responses delegation for response.create (proven:
+    // "response.create requires a session with Responses delegation"). The backend executes
+    // reasoning; client-executed function tools ride the delegation tool list.
+    const backendTools = Array.isArray(opts.sessionConfig.tools) ? opts.sessionConfig.tools : [];
+    session.delegation = {
+      responses: {
+        model: opts.backendModel || process.env.OPENAI_LIVE_BACKEND_MODEL || "gpt-4o-mini",
+        tool_choice: "auto",
+        ...(backendTools.length > 0 ? { tools: backendTools } : {}),
+      },
+    };
     this.rawSend({ type: "session.start", event_id: `bridge_start_${Date.now()}`, session });
   }
 

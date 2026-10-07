@@ -62,6 +62,7 @@ const mk = () => {
   check("E1b model", st && st.session.model === "gpt-live-1");
   check("E1c format", st && st.session.audio.format.type === "audio/pcmu" && st.session.audio.format.rate === 8000);
   check("E1d voice", st && st.session.audio.output.voice === "ash");
+  check("E1e delegation present", st && st.session.delegation && st.session.delegation.responses.model === "gpt-4o-mini");
 }
 // E2: messages buffered pre-start are flushed after session.started
 {
@@ -110,11 +111,12 @@ const mk = () => {
   s.send(JSON.stringify({ type: "response.cancel" }));
   check("E7 no commit/clear/cancel leaked", !sock.sent.some(m => ["input_audio_buffer.commit","input_audio_buffer.clear","response.cancel"].includes(m.type)));
 }
-// E8: response.create with greeting instructions → session.instructions.append
+// E8: response.create (greeting) is absorbed — opening lives in session.start instructions;
+// session.instructions.append is delegation-side (requires delegation_id) and must NOT be sent.
 {
   const { s, sock } = mk();
   s.send(JSON.stringify({ type: "response.create", response: { instructions: "Say EXACTLY: Tere!" } }));
-  check("E8 greeting instructions appended", sock.sent.some(m => m.type === "session.instructions.append" && m.instructions.includes("Tere!")));
+  check("E8 greeting absorbed (no instructions.append)", !sock.sent.some(m => m.type === "session.instructions.append"));
 }
 // E9: conversation.item.create → response.item.create
 {
