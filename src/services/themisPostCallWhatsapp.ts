@@ -93,7 +93,7 @@ export async function sendThemisPostCallWhatsapp(params: {
     const res = await fetch(MESSENTE_OMNIMESSAGE_URL, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${auth}`,
+        Authorization: `Basic ${auth}`,
         "Content-Type": "application/json",
         Accept: "application/json",
       },
