@@ -38,6 +38,7 @@ export function startThemisCallStatusAutoPoll(params: {
   const { callId, twilioCallSid, phone, debtAmountRaw } = params;
   const maxPolls = 8;       // 8 × 60s = 8 minutes total (Area B 2026-09-14: was 6 × 30s = 3 min, could miss long calls)
   let pollCount = 0;
+  let answeredAtWritten = false; // 5331 Phase-B: write answered_at exactly once per call
 
   async function pollCallStatus(): Promise<void> {
     pollCount += 1;
@@ -55,6 +56,18 @@ export function startThemisCallStatusAutoPoll(params: {
 
       const endedStatuses = new Set(["completed", "busy", "no-answer", "canceled", "failed"]);
       if (!endedStatuses.has(data.status)) {
+        // 5331 Phase-B: first observed non-terminal (in-progress/answered) tick = the answer
+        // moment (within one poll interval). Write answered_at once; the webhook path writes
+        // it too, but Twilio status callbacks are known-flaky (21626 history), so the poll
+        // backstops the value. Never overwrite an existing value.
+        if (!answeredAtWritten && (data.status === "in-progress" || data.status === "in_progress")) {
+          answeredAtWritten = true;
+          await updateCallBySid(twilioCallSid, {
+            answered_at: new Date().toISOString(),
+          }).catch((err: unknown) =>
+            console.warn(`[ThemisAuto] answered_at write error:`, err)
+          );
+        }
         // Call still in progress — poll again if we haven't hit the limit
         if (pollCount < maxPolls) {
           setTimeout(pollCallStatus, 60_000);
