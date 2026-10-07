@@ -63,6 +63,7 @@ const mk = () => {
   check("E1c format", st && st.session.audio.format.type === "audio/pcmu" && st.session.audio.format.rate === 8000);
   check("E1d voice", st && st.session.audio.output.voice === "ash");
   check("E1e delegation present", st && st.session.delegation && st.session.delegation.responses.model === "gpt-4o-mini");
+  check("E1f delegation.type=responses", st && st.session.delegation.type === "responses");
 }
 // E2: messages buffered pre-start are flushed after session.started
 {

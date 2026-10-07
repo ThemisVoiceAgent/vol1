@@ -137,7 +137,10 @@ export class LiveAsRealtimeSocket {
             type: "session.update",
             event_id: `bridge_tools_${Date.now()}`,
             session: {
-              delegation: { responses: { tools: session.tools, tool_choice: "auto" } },
+              delegation: {
+                type: "responses",
+                responses: { tools: session.tools, tool_choice: "auto" },
+              },
             },
           });
         }
@@ -245,6 +248,7 @@ export class LiveAsRealtimeSocket {
     // reasoning; client-executed function tools ride the delegation tool list.
     const backendTools = Array.isArray(opts.sessionConfig.tools) ? opts.sessionConfig.tools : [];
     session.delegation = {
+      type: "responses",
       responses: {
         model: opts.backendModel || process.env.OPENAI_LIVE_BACKEND_MODEL || "gpt-4o-mini",
         tool_choice: "auto",
