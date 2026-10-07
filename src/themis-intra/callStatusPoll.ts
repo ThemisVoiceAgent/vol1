@@ -84,15 +84,17 @@ export function startThemisCallStatusAutoPoll(params: {
       // 5331 Phase-E: derive answered_at from Twilio timestamps when the call was answered
       // (status completed with duration > 0) — the poll may have missed the in-progress
       // window entirely (short answered calls), so the in-progress write-once is not enough.
-      // answered_at := endTime - duration (no fabrication: only when both facts exist).
+      // answered_at := end_time - duration (no fabrication: only when both facts exist).
+      // Twilio Call-resource JSON uses snake_case: end_time / duration.
       const durationSec = data.duration ? parseInt(String(data.duration), 10) : 0;
+      const twilioEndTime = data.endTime || data.end_time;
       const answeredAtDerived =
-        data.status === "completed" && durationSec > 0 && data.endTime
-          ? new Date(new Date(data.endTime).getTime() - durationSec * 1000).toISOString()
+        data.status === "completed" && durationSec > 0 && twilioEndTime
+          ? new Date(new Date(twilioEndTime).getTime() - durationSec * 1000).toISOString()
           : undefined;
       await updateCallBySid(twilioCallSid, {
         status: data.status,
-        ended_at: data.endTime ? new Date(data.endTime).toISOString() : new Date().toISOString(),
+        ended_at: twilioEndTime ? new Date(twilioEndTime).toISOString() : new Date().toISOString(),
         duration_seconds: durationSec > 0 ? durationSec : null,
         ...(answeredAtDerived ? { answered_at: answeredAtDerived } : {}),
       }).catch((err: unknown) =>
