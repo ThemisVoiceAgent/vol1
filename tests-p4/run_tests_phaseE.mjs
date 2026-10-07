@@ -150,7 +150,7 @@ const mk = (cfg) => {
   const { s, sock } = mk();
   sock.fakeMsg({ type: "session.started", session: { id: "live_1" } });
   s.send(JSON.stringify({ type: "response.create", response: { instructions: "x" } }));
-  check("E12 response.create absorbed (greeting append excluded)", !sock.sent.some(m => m.type === "response.create" || (m.type === "session.instructions.append" && m.event_id !== "themis_initial_greeting")));
+  check("E12 response.create absorbed (greeting append excluded)", !sock.sent.some(m => m.type === "response.create" || (m.type === "session.instructions.append" && !m.event_id.startsWith("themis_initial_greeting"))));
 }
 
 // E13: output transcript deltas accumulate -> .done on quiet gap

@@ -49,12 +49,35 @@ export function applyThemisVariableAliases(vars: Record<string, string>): void {
     vars.outstanding_balance = amount;
     vars.debt_balance = amount;
   }
+  // 5331 final alignment: claimant + last-payment context for the agent prompt (Tanel
+  // requirements 3 + 6). Discriminator is the AUTHORITATIVE payload field creditor_name,
+  // not display text: Themis Öigusbüroo (TÖB) claims are normalized to claim_owner_type=tob;
+  // anything else = external client (claimant_name spoken). No fabrication: absent fields
+  // stay absent.
+  const creditor = (vars.creditor_name || "").trim();
+  if (creditor) {
+    vars.creditor_name = creditor;
+    const isTob = creditor.toUpperCase().includes("THEMIS");
+    vars.claim_owner_type = isTob ? "tob" : "external";
+    if (!isTob) vars.claimant_name = creditor;
+  }
+  const lastIncome = (vars.last_income_date || "").trim();
+  if (lastIncome) {
+    vars.last_payment_date = lastIncome;
+    const parsed = Date.parse(lastIncome);
+    if (!Number.isNaN(parsed)) {
+      const days = Math.floor((Date.now() - parsed) / 86400000);
+      if (days >= 0) vars.days_since_last_payment = String(days);
+    }
+  }
 }
 
 export function logThemisContext(callVariables: Record<string, string>, callId: string): void {
   console.log(
     `[ThemisContext] call_variables amount=${callVariables.debt_amount || callVariables.claim_remain || "-"} ` +
       `name=${callVariables.client_name || callVariables.first_name || "-"} ` +
+      `creditor=${callVariables.creditor_name || "-"} owner=${callVariables.claim_owner_type || "-"} ` +
+      `lastPayment=${callVariables.last_payment_date || "-"} daysSince=${callVariables.days_since_last_payment || "-"} ` +
       `fk_task_id=${callVariables.fk_task_id || "-"} ` +
       `campaign_id=${callVariables.campaign_id || "-"} ` +
       `callId=${callId}`
