@@ -21,6 +21,9 @@ export const config = {
   openai: {
     apiKey: process.env.OPENAI_API_KEY || "",
     realtimeModel: process.env.OPENAI_REALTIME_MODEL || "gpt-realtime-2.1",
+    // 5331 Phase-E: voice backend selection - "realtime" (default) or "live"
+    // (GPT-Live via the wire-level adapter). Flip ONLY via env.
+    voiceApi: process.env.OPENAI_VOICE_API || "realtime",
     get isConfigured() {
       return !!this.apiKey;
     },

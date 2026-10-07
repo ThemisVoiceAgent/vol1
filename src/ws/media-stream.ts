@@ -1,4 +1,5 @@
 import WebSocket from "ws";
+import { LiveAsRealtimeSocket } from "./live-as-realtime.js";
 import { createClient, SupabaseClient, RealtimeChannel } from "@supabase/supabase-js";
 import { config, getDeploymentIdentity } from "../config.js";
 import {
@@ -559,6 +560,9 @@ const DEFAULT_INSTRUCTIONS = `You are a professional AI phone agent. Follow thes
  */
 export function handleTwilioMediaStream(twilioWs: WebSocket) {
   let openaiWs: WebSocket | null = null;
+  // 5331 Phase-E: when voiceApi=live, openaiWs is a LiveAsRealtimeSocket (wire-level adapter
+  // exposing GPT-Live behind the Realtime event surface).
+  let liveBridge: LiveAsRealtimeSocket | null = null;
   let streamSid: string = "";
   let callId: string = "";
   let agentId: string = "";
@@ -3072,11 +3076,24 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
     pendingRecoveryCooldownMs = 0;
     clearTurnDetectionEnableTimer();
 
-    openaiWs = new WebSocket(url, {
-      headers: {
-        Authorization: `Bearer ${config.openai.apiKey}`,
-      },
-    });
+    if (config.openai.voiceApi === "live") {
+      // 5331 Phase-E: GPT-Live behind the wire-level adapter. The bridge buffers until the
+      // first session.update (which carries instructions/voice) triggers session.start.
+      liveBridge = new LiveAsRealtimeSocket({
+        apiKey: config.openai.apiKey,
+        model: "gpt-live-1",
+        sessionConfig: { instructions: "", voice: "ash", tools: [] },
+        logger: (m) => console.log(`[LiveBridge] (callId=${callId}) ${m}`),
+      });
+      openaiWs = liveBridge as unknown as WebSocket;
+      console.log(`[LiveBridge] OPENAI_VOICE_API=live — GPT-Live adapter active (callId=${callId}) model=gpt-live-1`);
+    } else {
+      openaiWs = new WebSocket(url, {
+        headers: {
+          Authorization: `Bearer ${config.openai.apiKey}`,
+        },
+      });
+    }
 
     const maybeStartInitialResponse = () => {
       if (realtimeSessionUpdateFailed) {
@@ -3441,6 +3458,17 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
       console.log(`[GreetingGate] initial turn_detection=null toolsWithheld=true callId=${callId}`);
       console.log(`[RealtimeGA] temperature_omitted model=${config.openai.realtimeModel} callId=${callId}`);
       console.log(`[Diag-OpenAI-Config] callId=${callId} ${JSON.stringify(lastSessionConfigSent)}`);
+      if (liveBridge) {
+        liveBridge.configure({
+          apiKey: config.openai.apiKey,
+          model: "gpt-live-1",
+          sessionConfig: {
+            instructions: fullInstructions,
+            voice: voice || "ash",
+            tools: [],
+          },
+        });
+      }
       openaiWs!.send(JSON.stringify(sessionUpdate));
     });
 
