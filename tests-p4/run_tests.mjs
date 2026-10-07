@@ -124,14 +124,14 @@ ${transpileFile("src/themis-intra/retry.ts", { stripImports: true })}
 `);
 const retryUrl = "file://" + retryPath;
 
-// ================= TEST A — duration mapping (no answered_at) =================
+// ================= TEST A — duration mapping (answered_at selected post-migration) =================
 console.log("\n=== TEST A: duration mapping via fetchCallsByIds → buildStatisticsRows ===");
 {
   fetchLog = [];
-  // FIX 1 applied: the SELECT must NOT contain answered_at
+  // Post-migration 006: the SELECT must include answered_at
   const repoSrc = readFileSync(path.join(ROOT, "src/themis-intra/campaignRepo.ts"), "utf8");
-  const selects = repoSrc.match(/\/calls\?select=[^`"]+|\/calls\?id=in[^`"]+/g) || [];
-  check("A0: no answered_at in any /calls select (FIX 1)", selects.every(s => !s.includes("answered_at")),
+  const selects = repoSrc.match(/\/calls\?(?:select=[^`"]+|id=in\.[^`"]+`\s*\+\s*\n?\s*`&select=[^`"]+)/g) || [];
+  check("A0: answered_at present in /calls selects (post-migration 006)", selects.length > 0 && selects.every(s => s.includes("answered_at")),
         `${selects.length} select strings checked`);
 
   // Stub Supabase: themis_campaign_calls rows + calls rows WITHOUT answered_at
@@ -174,7 +174,7 @@ console.log("\n=== TEST A: duration mapping via fetchCallsByIds → buildStatist
 
   // Verify the actual HTTP request the fixed code emits contains no answered_at
   const callsQuery = fetchLog.find(f => f.url.includes("/calls?id=in."));
-  check("A10: emitted REST query contains no answered_at", callsQuery && !callsQuery.url.includes("answered_at"));
+  check("A10: emitted REST query includes answered_at (post-migration 006)", callsQuery && callsQuery.url.includes("answered_at"));
 }
 
 // ================= TEST B — timezone DST-safety =================

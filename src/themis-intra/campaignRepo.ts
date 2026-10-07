@@ -169,14 +169,11 @@ export async function fetchCallsByIds(callIds: string[]): Promise<Map<string, Ca
 
   const unique = [...new Set(callIds)];
   const inList = unique.map((id) => encodeURIComponent(id)).join(",");
-  // NOTE: answered_at is intentionally NOT selected — the prod calls schema has no
-  // such column, and selecting a missing column fails the whole query (HTTP 400
-  // PGRST 42703), which broke fetchCallsByIds() consumers (statistics + retry
-  // safety net). Pickup time is not derivable from other columns; call_pickup_date
-  // simply renders empty/null when absent.
+  // 5331 Phase-B (post-migration 006): answered_at column now exists in prod; selecting it
+  // feeds call_pickup_date to Intra statistics. Historical rows keep answered_at = NULL.
   const q =
     `/calls?id=in.(${inList})` +
-    `&select=id,twilio_call_sid,campaign_id,to_number,from_number,status,started_at,ended_at,duration_seconds,transcript,summary,recording_url,outcome`;
+    `&select=id,twilio_call_sid,campaign_id,to_number,from_number,status,started_at,ended_at,duration_seconds,transcript,summary,recording_url,outcome,answered_at`;
 
   try {
     const res = await fetch(`${restBase()}${q}`, { method: "GET", headers: h });
@@ -339,7 +336,7 @@ export async function fetchCallsByCampaignId(campaignId: number | "all", limit =
   if (!h) return [];
 
   let q =
-    `/calls?select=id,twilio_call_sid,campaign_id,to_number,from_number,status,started_at,ended_at,duration_seconds,transcript,summary,recording_url,outcome` +
+    `/calls?select=id,twilio_call_sid,campaign_id,to_number,from_number,status,started_at,ended_at,duration_seconds,transcript,summary,recording_url,outcome,answered_at` +
     `&order=started_at.desc&limit=${limit}`;
   if (campaignId !== "all") {
     q += `&campaign_id=eq.${encodeURIComponent(String(campaignId))}`;
