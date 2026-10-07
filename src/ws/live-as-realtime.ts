@@ -345,6 +345,15 @@ export class LiveAsRealtimeSocket {
         this.sessionStarted = true;
         const sess = (msg.session || {}) as Record<string, unknown>;
         this.liveSessionId = String(sess.id || msg.session_id || "") || null;
+        // Server-resolved config (acceptance evidence): requested vs resolved model/voice.
+        const resAudio = (sess.audio || {}) as Record<string, unknown>;
+        const resOut = (resAudio.output || {}) as Record<string, unknown>;
+        const resFormat = (resAudio.format || {}) as Record<string, unknown>;
+        this.log(
+          `session.resolved requestedModel=${this.opts?.model || "?"} resolvedModel=${sess.model || "?"} ` +
+          `requestedVoice=${this.opts?.sessionConfig.voice || "?"} resolvedVoice=${resOut.voice || "?"} ` +
+          `format=${resFormat.type || "?"}@${resFormat.rate || "?"} sessionId=${this.liveSessionId}`,
+        );
         // Flush buffered Realtime messages (session.update etc.) — order preserved.
         const buffered = this.pendingBeforeStart.splice(0);
         this.emitTranslated({
