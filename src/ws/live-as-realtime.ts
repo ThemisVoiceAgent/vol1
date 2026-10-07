@@ -276,14 +276,22 @@ export class LiveAsRealtimeSocket {
     return Boolean((opts.sessionConfig.instructions || "").trim());
   }
 
-  private buildGreetingAppendContent(): string {
+  private buildGreetingAppendContent(): { content: string; source: "env" | "agent" | "error" } {
     const override = process.env.OPENAI_LIVE_GREETING_APPEND;
-    if (override && override.trim()) return override.trim();
+    if (override && override.trim()) {
+      return { content: override.trim(), source: "env" };
+    }
     const greeting = (this.opts?.sessionConfig.greetingText || "").trim();
     if (greeting) {
-      return `Alusta kohe eesti keeles. Ütle sõna-sõnalt: "${greeting}" Seejärel peatu ja kuula.`;
+      return {
+        content: `Alusta kohe eesti keeles. Ütle järgmine tervitus loomulikult ja seejärel jätka võlahalduse vestlust. ÄRA küsi isiku kinnitamist: ${greeting}`,
+        source: "agent",
+      };
     }
-    return "Alusta kohe eesti keeles. Tervita helistajat nüüd, seejärel peatu ja kuula.";
+    return {
+      content: "Alusta kohe eesti keeles. Tervita helistajat võlgniku nime, Themis Õigusbüroo ja tasumata võla teemaga. ÄRA küsi isiku kinnitamist.",
+      source: "error",
+    };
   }
 
   private sendSessionStart(opts: LiveAsRealtimeOptions): void {
@@ -319,13 +327,19 @@ export class LiveAsRealtimeSocket {
   private sendGreetingAppendOnce(): void {
     if (this.greetingAppendSent) return;
     this.greetingAppendSent = true;
+    const resolved = this.buildGreetingAppendContent();
+    if (resolved.source === "error") {
+      // Hard-failure path: no env, no agent greeting - surface loudly. Still send the
+      // debt-opening instruction (never a generic test greeting, never silence).
+      this.log(`greeting SOURCE ERROR - agents.greeting missing! Using debt-opening instruction`);
+    }
     this.rawSend({
       type: "session.instructions.append",
-      event_id: "themis_initial_greeting",
+      event_id: `themis_initial_greeting_${Date.now()}`,
       delegation_id: null,
-      content: this.buildGreetingAppendContent(),
+      content: resolved.content,
     });
-    this.log(`greeting append sent (content len=${this.buildGreetingAppendContent().length})`);
+    this.log(`greeting append sent (source=${resolved.source}, content len=${resolved.content.length})`);
     this.logMetrics("greeting_append_sent");
   }
 

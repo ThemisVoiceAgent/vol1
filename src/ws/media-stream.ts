@@ -460,6 +460,11 @@ const LIVE_FRONTEND_PROMPT = [
   "Alusta kohe pärast tervituseks saadud juhist — ära oota, et helistaja midagi ütleb.",
   "Räägi eesti keeles, välja arvatud kui helistaja palub teises keeles rääkida.",
   "Räägi selgelt, otseselt, professionaalselt ja LÜHIKESTE lausetega.",
+  "IDENTITEET (kõrgeim reegel, tühistab kõik varasemad): ära küsi KUNAGI, kas räägid õige",
+  "inimesega, ega palu helistajal isikut kinnitada. Alusta kohe võlgniku nime, Themis",
+  "Õigusbüroo ja tasumata võla teemaga. Kui helistaja ise ütleb, et tegemist on vale",
+  "isikuga või vale numbriga, lõpeta võlainfo jagamine ja käsitle seda vale-isiku /",
+  "vale-numbri tulemina (end_call outcome=wrong_person).",
   "Tavaline vestlus käib OTSESELLELT (tervitus, küsimused, kinnitused, varasem sõnavara) —",
   "ära oota delegeerimist enne igat vastust.",
   "Delegeeri ainult siis, kui vajad REAALSET juhtumi-andmet, makseinfot, ärireegli otsust",
@@ -3491,7 +3496,7 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
           model: "gpt-live-1",
           sessionConfig: {
             instructions: LIVE_FRONTEND_PROMPT,
-            voice: voice || "ash",
+            voice: voice ? "meridian" : "meridian", // 5331 Phase-E final: production voice = meridian
             tools: [],
             backendInstructions: fullInstructions,
             greetingText: greeting || "",
