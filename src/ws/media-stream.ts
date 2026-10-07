@@ -124,25 +124,26 @@ async function persistSmsMessage(row: {
   }
 }
 
-// Post-call analysis via edge function
+// Post-call analysis via OpenAI chat completions (direct — the supabase ai-completion edge
+// function does not exist in this project; 5331 Phase-B).
 async function runPostCallAnalysis(callId: string, transcript: string, analysisPrompt: string) {
-  if (!config.supabase.url || !config.supabase.anonKey) return;
+  if (!config.openai.isConfigured || !transcript) return;
   try {
-    const url = `${config.supabase.url.replace(/\/+$/, "")}/functions/v1/ai-completion`;
     const systemMsg = analysisPrompt || "Analyze this call transcript. Provide a brief summary of the conversation, the outcome, and any action items. IMPORTANT: Detect the language used in the transcript (Estonian, Russian, or English) and write your entire analysis in that same language. Do not mix languages.";
-    const res = await fetch(url, {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${config.supabase.anonKey}`,
-        apikey: config.supabase.anonKey,
+        Authorization: `Bearer ${config.openai.apiKey}`,
       },
       body: JSON.stringify({
+        model: "gpt-4o-mini",
         messages: [
           { role: "system", content: systemMsg },
           { role: "user", content: transcript },
         ],
-        model: "google/gemini-2.5-flash",
+        max_tokens: 400,
+        temperature: 0.2,
       }),
     });
     if (res.ok) {
