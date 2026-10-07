@@ -123,6 +123,27 @@ const mk = () => {
   const ev = sock.sent.find(m => m.type === "response.item.create" && m.item && m.item.role === "system");
   check("E9 system item mapped", !!ev);
 }
+// E11: turn kick — first input_audio.append post-start triggers one response.create
+{
+  const { s, sock } = mk();
+  sock.fakeMsg({ type: "session.started", session: { id: "s1" } });
+  s.send(JSON.stringify({ type: "input_audio_buffer.append", audio: "AA" }));
+  const kicks = sock.sent.filter(m => m.type === "response.create");
+  check("E11 turn kick on first audio", kicks.length === 1);
+  s.send(JSON.stringify({ type: "input_audio_buffer.append", audio: "BB" }));
+  check("E11b only one kick", sock.sent.filter(m => m.type === "response.create").length === 1);
+  check("E11c both audio forwarded", sock.sent.filter(m => m.type === "session.input_audio.append").length === 2);
+}
+
+// E12: no kick before session.started
+{
+  const s = new LiveAsRealtimeSocket({ apiKey: "k", model: "gpt-live-1", sessionConfig: { instructions: "", voice: "ash", tools: [] } });
+  const sock = globalThis.__lastFake;
+  // NOT opened yet: send is buffered pre-start; the kick must not fire.
+  s.send(JSON.stringify({ type: "input_audio_buffer.append", audio: "CC" }));
+  check("E12 no kick pre-start", !sock.sent.some(m => m.type === "response.create"));
+}
+
 // E10: session.close → close event + synthesized response.done on session.closed
 {
   const { s, sock, out } = mk();

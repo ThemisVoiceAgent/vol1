@@ -50,6 +50,8 @@ export class LiveAsRealtimeSocket {
   private log: (msg: string) => void;
   private sessionStarted = false;
   private readonly pendingBeforeStart: PendingMessage[] = [];
+  // 5331 Phase-E: Live speaks only once input audio flows + a delegated turn is requested.
+  private turnKickPending = true;
   private startSent = false;
   private speedWarned = false;
   private activeResponseId: string | null = null;
@@ -160,6 +162,13 @@ export class LiveAsRealtimeSocket {
           event_id: `bridge_in_${Date.now()}`,
           audio: msg.audio,
         });
+        // 5331 Phase-E: Live's voice layer activates on the duplex loop — once caller audio
+        // is flowing, kick the first delegated turn (proven: response.create alone with no
+        // input audio produces zero speech; with audio + response.create the model speaks).
+        if (this.turnKickPending && this.sessionStarted) {
+          this.turnKickPending = false;
+          this.rawSend({ type: "response.create", event_id: `bridge_kick_${Date.now()}` });
+        }
         break;
       }
       case "input_audio_buffer.commit":

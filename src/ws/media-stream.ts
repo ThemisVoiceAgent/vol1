@@ -1687,6 +1687,11 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
     opts?: { transcriptReadyItemId?: string | null }
   ): string | null => {
     const transcriptItemId = opts?.transcriptReadyItemId ?? null;
+    // 5331 Phase-E (live mode): GPT-Live manages turns natively (full-duplex, own VAD).
+    // Client-side greeting/cooldown gates would starve the model of input audio and deadlock
+    // the opening (proven in the 12:18 acceptance call). Let audio flow; the adapter handles
+    // the turn kick.
+    if (liveBridge) return null;
     let trustVadTurnEnd = false;
     if (transcriptItemId) {
       trustVadTurnEnd =
