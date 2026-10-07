@@ -26,7 +26,7 @@ export function getThemisWhatsappTemplateName(): string {
   return (process.env.THEMIS_WHATSAPP_TEMPLATE || "teated_volgnikele_test").trim();
 }
 export function getThemisWhatsappSender(): string {
-  return (process.env.MESSENTE_WHATSAPP_SENDER || "themis.ee").trim();
+  return (process.env.MESSENTE_WHATSAPP_SENDER || process.env.MESSENTE_SMS_SENDER || "themis.ee").trim();
 }
 
 export interface ThemisWhatsappResult {
@@ -84,7 +84,7 @@ export async function sendThemisPostCallWhatsapp(params: {
           sender: getThemisWhatsappSender(),
           template: {
             name: getThemisWhatsappTemplateName(),
-            language: "et",
+            language: { code: "et" },
             components: [{ type: "body", parameters: [] }],
           },
         },
