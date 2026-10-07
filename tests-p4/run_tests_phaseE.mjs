@@ -153,6 +153,30 @@ const mk = (cfg) => {
   check("E12 response.create absorbed (greeting append excluded)", !sock.sent.some(m => m.type === "response.create" || (m.type === "session.instructions.append" && m.event_id !== "themis_initial_greeting")));
 }
 
+// E13: output transcript deltas accumulate -> .done on quiet gap
+{
+  const { s, sock, out } = mk();
+  sock.fakeMsg({ type: "session.started", session: { id: "live_1" } });
+  sock.fakeMsg({ type: "session.output_transcript.delta", delta: "Tere, " });
+  sock.fakeMsg({ type: "session.output_transcript.delta", delta: "Henri!" });
+  const gotDone = () => out.filter(e => e.type === "response.output_audio_transcript.done" && e.transcript === "Tere, Henri!");
+  check("E13 no .done before quiet gap", gotDone().length === 0);
+  await new Promise(r => setTimeout(r, 1400));
+  check("E13b .done after quiet gap", gotDone().length === 1);
+}
+
+// E14: input transcript deltas -> completed event on quiet gap
+{
+  const { s, sock, out } = mk();
+  sock.fakeMsg({ type: "session.started", session: { id: "live_1" } });
+  sock.fakeMsg({ type: "session.input_transcript.delta", delta: "Jah" });
+  sock.fakeMsg({ type: "session.input_transcript.delta", delta: " kuulen." });
+  const gotCompleted = () => out.filter(e => e.type === "conversation.item.input_audio_transcription.completed" && e.transcript === "Jah kuulen.");
+  check("E14 no completed before quiet gap", gotCompleted().length === 0);
+  await new Promise(r => setTimeout(r, 1400));
+  check("E14b completed after quiet gap", gotCompleted().length === 1);
+}
+
 // E10: session.close → close event + synthesized response.done on session.closed
 {
   const { s, sock, out } = mk();

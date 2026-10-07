@@ -65,6 +65,13 @@ export class LiveAsRealtimeSocket {
   private currentResponseId: string | null = null;
   /** Accumulated assistant text from nested delegation output_text deltas. */
   private outputText = "";
+  // 5331 Phase-E v3: Live streams transcript DELTAS with no per-turn done events — media-
+  // stream consumes .done/.completed shapes. Accumulate and flush on a quiet gap.
+  private liveOutputTranscript = "";
+  private liveInputTranscript = "";
+  private outTranscriptFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  private inTranscriptFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly TRANSCRIPT_QUIET_MS = 1200;
   /** Call-id → function name cache from nested output_item.done events. */
   private pendingFunctionCalls = new Map<string, string>();
   private opts: LiveAsRealtimeOptions | null = null;
@@ -395,6 +402,10 @@ export class LiveAsRealtimeSocket {
           type: "conversation.item.input_audio_transcription.delta",
           delta: msg.delta,
         });
+        if (typeof msg.delta === "string") {
+          this.liveInputTranscript += msg.delta;
+          this.scheduleInputTranscriptFlush();
+        }
         break;
       }
       case "session.output_transcript.delta": {
@@ -404,6 +415,10 @@ export class LiveAsRealtimeSocket {
           response_id: this.currentResponseId,
           delta: msg.delta,
         });
+        if (typeof msg.delta === "string") {
+          this.liveOutputTranscript += msg.delta;
+          this.scheduleOutputTranscriptFlush();
+        }
         break;
       }
       case "response.output_item.done": {
@@ -417,8 +432,19 @@ export class LiveAsRealtimeSocket {
         break;
       }
       case "session.closed": {
-        // Flush any pending assistant text as a transcript-done so finalizeCall captures it,
-        // then hand the Realtime-shaped terminal event to media-stream.
+        // Flush pending accumulated transcripts so finalizeCall captures them.
+        if (this.outTranscriptFlushTimer) { clearTimeout(this.outTranscriptFlushTimer); this.outTranscriptFlushTimer = null; }
+        if (this.inTranscriptFlushTimer) { clearTimeout(this.inTranscriptFlushTimer); this.inTranscriptFlushTimer = null; }
+        const pendingOut = this.liveOutputTranscript.trim();
+        if (pendingOut) {
+          this.liveOutputTranscript = "";
+          this.emitTranslated({ type: "response.output_audio_transcript.done", response_id: this.currentResponseId, transcript: pendingOut });
+        }
+        const pendingIn = this.liveInputTranscript.trim();
+        if (pendingIn) {
+          this.liveInputTranscript = "";
+          this.emitTranslated({ type: "conversation.item.input_audio_transcription.completed", item_id: `user_${Date.now()}`, transcript: pendingIn });
+        }
         this.flushOutputTranscript("session_closed");
         this.emitTranslated({
           type: "response.done",
@@ -479,6 +505,39 @@ export class LiveAsRealtimeSocket {
       name: item.name,
       arguments: item.arguments,
     });
+  }
+
+  private scheduleOutputTranscriptFlush(): void {
+    if (this.outTranscriptFlushTimer) clearTimeout(this.outTranscriptFlushTimer);
+    this.outTranscriptFlushTimer = setTimeout(() => {
+      this.outTranscriptFlushTimer = null;
+      const text = this.liveOutputTranscript.trim();
+      if (!text) return;
+      this.liveOutputTranscript = "";
+      if (!this.currentResponseId) this.currentResponseId = `live_${Date.now()}`;
+      this.emitTranslated({
+        type: "response.output_audio_transcript.done",
+        response_id: this.currentResponseId,
+        transcript: text,
+      });
+      this.log(`assistant transcript flushed (${text.length} chars, quiet-gap)`);
+    }, LiveAsRealtimeSocket.TRANSCRIPT_QUIET_MS);
+  }
+
+  private scheduleInputTranscriptFlush(): void {
+    if (this.inTranscriptFlushTimer) clearTimeout(this.inTranscriptFlushTimer);
+    this.inTranscriptFlushTimer = setTimeout(() => {
+      this.inTranscriptFlushTimer = null;
+      const text = this.liveInputTranscript.trim();
+      if (!text) return;
+      this.liveInputTranscript = "";
+      this.emitTranslated({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: `user_${Date.now()}`,
+        transcript: text,
+      });
+      this.log(`user transcript flushed (${text.length} chars, quiet-gap)`);
+    }, LiveAsRealtimeSocket.TRANSCRIPT_QUIET_MS);
   }
 
   private flushOutputTranscript(reason: string): void {
