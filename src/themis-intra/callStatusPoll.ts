@@ -81,10 +81,20 @@ export function startThemisCallStatusAutoPoll(params: {
 
       // Update the calls table so the safety net (scheduleMissedRetries)
       // can detect missed retries even if the Twilio webhook doesn't fire.
+      // 5331 Phase-E: derive answered_at from Twilio timestamps when the call was answered
+      // (status completed with duration > 0) — the poll may have missed the in-progress
+      // window entirely (short answered calls), so the in-progress write-once is not enough.
+      // answered_at := endTime - duration (no fabrication: only when both facts exist).
+      const durationSec = data.duration ? parseInt(String(data.duration), 10) : 0;
+      const answeredAtDerived =
+        data.status === "completed" && durationSec > 0 && data.endTime
+          ? new Date(new Date(data.endTime).getTime() - durationSec * 1000).toISOString()
+          : undefined;
       await updateCallBySid(twilioCallSid, {
         status: data.status,
         ended_at: data.endTime ? new Date(data.endTime).toISOString() : new Date().toISOString(),
-        duration_seconds: data.duration ? parseInt(String(data.duration), 10) : null,
+        duration_seconds: durationSec > 0 ? durationSec : null,
+        ...(answeredAtDerived ? { answered_at: answeredAtDerived } : {}),
       }).catch((err: unknown) =>
         console.warn(`[ThemisAuto] updateCallBySid error:`, err)
       );
