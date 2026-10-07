@@ -793,6 +793,7 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
   let callFinalized = false;
   // 5331 Phase-B: structured outcome reported by the agent via the end_call tool, persisted at
   // finalize. Shape: { outcome, payment_promise_date?, payment_promise_amount? } | null.
+  let goodbyeFallbackTimer: ReturnType<typeof setTimeout> | null = null;
   let endCallStructuredOutcome: {
     outcome: string;
     payment_promise_date?: string;
@@ -3774,6 +3775,51 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
             const assistantTranscript = (event.transcript || "").toString();
             console.log(`[MediaStream] AI said (callId=${callId}): ${assistantTranscript}`);
             transcriptLines.push(`[Agent]: ${assistantTranscript}`);
+
+            // 5331 goodbye-fallback (Henri): the GPT-Live model often SAYS the closing line
+            // but never calls end_call — the caller is left hanging. When the agent's last
+            // line is a goodbye and no end_call arrives, hang up server-side after a short
+            // quiet window and synthesize the structured outcome from the transcript.
+            {
+              const at = assistantTranscript.toLowerCase();
+              const isGoodbye = /head (päeva|aega)|hüvasti|tšau|nägemist|kuulemiseni/.test(at);
+              if (isGoodbye) {
+                // Synthesize outcome once per call from the accumulated transcript.
+                if (!endCallStructuredOutcome && openaiWs) {
+                  const joined = transcriptLines.join(" ");
+                  const amountMatches = [...joined.matchAll(/(\d{2,6})\s*(?:eurot|eur|€)/gi)].map(m => parseInt(m[1], 10));
+                  const dateMatch = joined.match(/(\d{1,2})\.?\s*(jaanuar|veebruar|märts|aprill|mai|juuni|juuli|august|september|oktoober|november|detsember)/i);
+                  const isDispute = /ei tunnista|vaidlus|dispute/.test(joined);
+                  const isWrong = /vale (isik|number|inimene)/.test(joined);
+                  let outcomeVal: string = "other_completed";
+                  if (isWrong) outcomeVal = "wrong_person";
+                  else if (isDispute) outcomeVal = "dispute";
+                  else if (amountMatches.length > 0 && dateMatch) outcomeVal = "payment_promise";
+                  endCallStructuredOutcome = { outcome: outcomeVal };
+                  if (outcomeVal === "payment_promise") {
+                    endCallStructuredOutcome.payment_promise_amount = String(Math.max(...amountMatches)) + ".00";
+                    const months: Record<string, string> = { jaanuar: "01", veebruar: "02", märts: "03", aprill: "04", mai: "05", juuni: "06", juuli: "07", august: "08", september: "09", oktoober: "10", november: "11", detsember: "12" };
+                    if (dateMatch) {
+                      const mon = months[dateMatch[2].toLowerCase()];
+                      const day = String(parseInt(dateMatch[1], 10)).padStart(2, "0");
+                      const year = new Date().getFullYear();
+                      endCallStructuredOutcome.payment_promise_date = `${year}-${mon}-${day}`;
+                    }
+                  }
+                  console.log(`[EndCall] goodbye-fallback outcome synthesized: ${JSON.stringify(endCallStructuredOutcome)} (callId=${callId})`);
+                }
+                // Hang up after 4 s of quiet — if end_call arrives in that window, the
+                // normal path wins (completePendingEndCallHangup is idempotent).
+                if (!goodbyeFallbackTimer && openaiWs) {
+                  goodbyeFallbackTimer = setTimeout(() => {
+                    goodbyeFallbackTimer = null;
+                    console.log(`[EndCall] goodbye-fallback: no end_call from model — hanging up (callId=${callId})`);
+                    if (!endCallStructuredOutcome) endCallStructuredOutcome = { outcome: "other_completed" };
+                    finalizeCall();
+                  }, 4000);
+                }
+              }
+            }
             if (callDirection === "inbound" && activeResponseReason !== "initial-greeting") {
               console.log(`[Diag-InboundTurn] response.audio_transcript.done seq=${activeResponseInboundTranscriptSeq} responseId=${activeResponseId || "none"} text="${assistantTranscript.slice(0, 160)}" (callId=${callId})`);
               if (activeResponseTwilioChunks > 0) {
