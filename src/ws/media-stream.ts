@@ -452,6 +452,20 @@ async function sendSms(to: string, body: string): Promise<{ ok: boolean; sid?: s
 }
 
 const OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime";
+
+// 5331 Phase-E: SHORT voice-frontend prompt for GPT-Live (session.instructions). Business
+// logic stays in delegation.responses.instructions (the full agent prompt is passed there).
+const LIVE_FRONTEND_PROMPT = [
+  "Sa oled Themis Õigusbüroo võlahalduse kõneagent (helistad võlgnikule välja).",
+  "Räägi eesti keeles, välja arvatud kui helistaja palub teises keeles rääkida.",
+  "Räägi selgelt, otseselt, professionaalselt ja LÜHIKESTE lausetega.",
+  "Peegel-politika: kasuta vähe tagasiside-hääli (backchannel); ära räägi helistaja üle.",
+  "Katkestus-politika: kui helistaja katkestab, lõpeta kohe rääkimine ja kuula.",
+  "Delegeerimis-politika: delegeeri igal juhul, kui vajad juhtumi andmeid, makseinfot,",
+  "ärireegli arutlust või süsteemitegevust. Ära leiuta juhtumifakte ootel olles.",
+  "Lõpeta kõne end_call tööriistaga koos struktureeritud tulemusega (outcome + makslubaduse",
+  "väljad), kui kõne eesmärk on saavutatud või jätkamine on mõtetu.",
+].join("\n");
 /** GA Realtime: G.711 μ-law (Twilio-compatible). */
 const REALTIME_GA_ULAW_FORMAT = { type: "audio/pcmu" } as const;
 const REALTIME_GA_RESPONSE_MODALITIES = ["audio"] as const;
@@ -3464,13 +3478,19 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
       console.log(`[RealtimeGA] temperature_omitted model=${config.openai.realtimeModel} callId=${callId}`);
       console.log(`[Diag-OpenAI-Config] callId=${callId} ${JSON.stringify(lastSessionConfigSent)}`);
       if (liveBridge) {
+        // 5331 Phase-E (live): split prompts per GPT-Live architecture —
+        //   session.instructions = SHORT voice frontend (this point forward is deferred to
+        //   configure → session.start), delegation.responses.instructions = full business
+        //   logic (the 28k agent prompt), greeting = ONE session.instructions.append.
         liveBridge.configure({
           apiKey: config.openai.apiKey,
           model: "gpt-live-1",
           sessionConfig: {
-            instructions: fullInstructions,
+            instructions: LIVE_FRONTEND_PROMPT,
             voice: voice || "ash",
             tools: [],
+            backendInstructions: fullInstructions,
+            greetingText: greeting || "",
           },
         });
       }

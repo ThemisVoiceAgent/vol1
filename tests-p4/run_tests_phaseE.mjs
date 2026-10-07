@@ -43,8 +43,12 @@ const LiveAsRealtimeSocket = live.LiveAsRealtimeSocket;
 let pass = 0, fail = 0;
 const check = (name, cond) => { if (cond) { pass++; console.log(`  PASS ${name}`); } else { fail++; console.log(`  FAIL ${name}`); } };
 
-const mk = () => {
-  const s = new LiveAsRealtimeSocket({ apiKey: "k", model: "gpt-live-1", sessionConfig: { instructions: "", voice: "ash", tools: [] } });
+const mk = (cfg) => {
+  const s = new LiveAsRealtimeSocket(Object.assign({
+    apiKey: "k", model: "gpt-live-1",
+    sessionConfig: { instructions: "Sa oled Themise kõneagent. Räägi eesti keeles.", voice: "ash", tools: [] },
+    backendModel: "gpt-6-luna",
+  }, cfg || {}));
   const sock = globalThis.__lastFake;
   const out = [];
   s.on("message", (d) => out.push(JSON.parse(d.toString())));
@@ -62,7 +66,7 @@ const mk = () => {
   check("E1b model", st && st.session.model === "gpt-live-1");
   check("E1c format", st && st.session.audio.format.type === "audio/pcmu" && st.session.audio.format.rate === 8000);
   check("E1d voice", st && st.session.audio.output.voice === "ash");
-  check("E1e delegation present", st && st.session.delegation && st.session.delegation.responses.model === "gpt-4o-mini");
+  check("E1e delegation present", st && st.session.delegation && st.session.delegation.responses.model === "gpt-6-luna");
   check("E1f delegation.type=responses", st && st.session.delegation.type === "responses");
 }
 // E2: messages buffered pre-start are flushed after session.started
@@ -93,6 +97,7 @@ const mk = () => {
 // E5: function_call_output → response.item.create with function_call_output item
 {
   const { s, sock } = mk();
+  sock.fakeMsg({ type: "session.started", session: { id: "live_1" } });
   s.send(JSON.stringify({ type: "function_call_output", call_id: "c1", output: "ok" }));
   const ev = sock.sent.find(m => m.type === "response.item.create");
   check("E5 fn output item", ev && ev.item.type === "function_call_output" && ev.item.call_id === "c1");
@@ -100,6 +105,7 @@ const mk = () => {
 // E6: speed dropped (session.update with speed) with a notice
 {
   const { s, sock, out } = mk();
+  sock.fakeMsg({ type: "session.started", session: { id: "live_1" } });
   s.send(JSON.stringify({ type: "session.update", session: { audio: { output: { speed: 1.25 } } } }));
   check("E6 speed not forwarded", !sock.sent.some(m => m.session && m.session.audio && m.session.audio.output && m.session.audio.output.speed !== undefined));
   check("E6b session.updated ack emitted", out.some(e => e.type === "session.updated"));
@@ -122,34 +128,35 @@ const mk = () => {
 // E9: conversation.item.create → response.item.create
 {
   const { s, sock } = mk();
+  sock.fakeMsg({ type: "session.started", session: { id: "live_1" } });
   s.send(JSON.stringify({ type: "conversation.item.create", item: { type: "message", role: "system", content: "note" } }));
   const ev = sock.sent.find(m => m.type === "response.item.create" && m.item && m.item.role === "system");
   check("E9 system item mapped", !!ev);
 }
-// E11: turn kick — first input_audio.append post-start triggers one response.create
+// E11: greeting append — after session.started exactly ONE session.instructions.append
 {
-  const { s, sock } = mk();
-  sock.fakeMsg({ type: "session.started", session: { id: "s1" } });
-  s.send(JSON.stringify({ type: "input_audio_buffer.append", audio: "AA" }));
-  const kicks = sock.sent.filter(m => m.type === "response.create");
-  check("E11 turn kick on first audio", kicks.length === 1);
-  s.send(JSON.stringify({ type: "input_audio_buffer.append", audio: "BB" }));
-  check("E11b only one kick", sock.sent.filter(m => m.type === "response.create").length === 1);
-  check("E11c both audio forwarded", sock.sent.filter(m => m.type === "session.input_audio.append").length === 2);
+  const { s, sock, out } = mk();
+  sock.fakeMsg({ type: "session.started", session: { id: "live_1" } });
+  const appends = sock.sent.filter(m => m.type === "session.instructions.append");
+  check("E11 greeting append sent once", appends.length === 1 && appends[0].delegation_id === null && !!appends[0].content);
+  sock.fakeMsg({ type: "session.instructions.appended" });
+  check("E11b append ACK forwarded", out.some(e => e.type === "session.instructions.appended"));
+  sock.fakeMsg({ type: "session.started", session: { id: "live_1" } });
+  check("E11c still one append (idempotent)", sock.sent.filter(m => m.type === "session.instructions.append").length === 1);
 }
 
-// E12: no kick before session.started
+// E12: NO response.create forwarded (not a speak trigger in Live)
 {
-  const s = new LiveAsRealtimeSocket({ apiKey: "k", model: "gpt-live-1", sessionConfig: { instructions: "", voice: "ash", tools: [] } });
-  const sock = globalThis.__lastFake;
-  // NOT opened yet: send is buffered pre-start; the kick must not fire.
-  s.send(JSON.stringify({ type: "input_audio_buffer.append", audio: "CC" }));
-  check("E12 no kick pre-start", !sock.sent.some(m => m.type === "response.create"));
+  const { s, sock } = mk();
+  sock.fakeMsg({ type: "session.started", session: { id: "live_1" } });
+  s.send(JSON.stringify({ type: "response.create", response: { instructions: "x" } }));
+  check("E12 response.create absorbed (greeting append excluded)", !sock.sent.some(m => m.type === "response.create" || (m.type === "session.instructions.append" && m.event_id !== "themis_initial_greeting")));
 }
 
 // E10: session.close → close event + synthesized response.done on session.closed
 {
   const { s, sock, out } = mk();
+  sock.fakeMsg({ type: "session.started", session: { id: "live_1" } });
   s.send(JSON.stringify({ type: "session.close" }));
   check("E10 close sent", sock.sent.some(m => m.type === "session.close"));
   sock.fakeMsg({ type: "session.closed", usage: { seconds: 42 }, reason: "close_requested" });
