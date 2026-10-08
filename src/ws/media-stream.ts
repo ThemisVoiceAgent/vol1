@@ -793,6 +793,8 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
   let callFinalized = false;
   // 5331 Phase-B: structured outcome reported by the agent via the end_call tool, persisted at
   // finalize. Shape: { outcome, payment_promise_date?, payment_promise_amount? } | null.
+  let voicemailHangupTimer: ReturnType<typeof setTimeout> | null = null;
+  let voicemailHangupFired = false;
   let goodbyeFallbackTimer: ReturnType<typeof setTimeout> | null = null;
   let endCallStructuredOutcome: {
     outcome: string;
@@ -3867,6 +3869,28 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
             const transcriptTextAll = String(event.transcript || "").trim();
             console.log(`[Diag] user_transcript #${userTranscriptCount} (callId=${callId}): "${event.transcript}"`);
             transcriptLines.push(`[User]: ${event.transcript}`);
+
+            // 5331 voicemail detection (Henri): when the AI reaches a voicemail greeting,
+            // END THE CALL IMMEDIATELY. Detect the greeting pattern in the user transcript
+            // and (a) synthesize outcome=voicemail, (b) hang up after a short grace window.
+            {
+              const ut = String(event.transcript || "").toLowerCase();
+              const isVoicemail =
+                /helisignaal|k\u00f5nepost|k\u00f5neposti|j\u00e4tke teade|j\u00e4taksite|salvestama|automatteade|teie teade/.test(ut);
+              if (isVoicemail && !voicemailHangupFired) {
+                voicemailHangupFired = true;
+                if (!endCallStructuredOutcome) {
+                  endCallStructuredOutcome = { outcome: "other_completed" };
+                }
+                console.log(`[EndCall] voicemail detected — ending call immediately (callId=${callId}) transcript="${event.transcript?.slice(0, 80) || ""}"`);
+                // Grace: 3 s so the greeting finishes audibly, then hang up.
+                voicemailHangupTimer = setTimeout(() => {
+                  voicemailHangupTimer = null;
+                  console.log(`[EndCall] voicemail hangup firing (callId=${callId})`);
+                  finalizeCall();
+                }, 3000);
+              }
+            }
             if (!transcriptTextAll) {
               console.log(`[TurnGate] ignore_empty_user_turn callId=${callId} itemId=${transcriptItemId}`);
               clearStalePendingUserTurn("empty_transcript", transcriptItemId);
