@@ -1,5 +1,11 @@
 import WebSocket from "ws";
 import { LiveAsRealtimeSocket } from "./live-as-realtime.js";
+import {
+  buildThemisCampaignStartInstruction,
+  isThemisOutboundCampaignCall,
+  resolveInitialResponseStartAction,
+  resolveThemisCampaignOpening,
+} from "./initialGreetingPolicy.js";
 import { createClient, SupabaseClient, RealtimeChannel } from "@supabase/supabase-js";
 import { config, getDeploymentIdentity } from "../config.js";
 import {
@@ -597,9 +603,11 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
   let calledNumber: string = "";
   let fromNumber: string = "";
   let callDirection: "inbound" | "outbound" = "outbound";
+  let explicitCallDirection: string = "";
   let callSid: string = "";
   let campaignId: string = "";
   let callVariables: Record<string, string> = {};
+  let isThemisOutboundCampaignContext = false;
 
   // Collect transcript turns
   const transcriptLines: string[] = [];
@@ -2472,6 +2480,12 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
     if (callId && callDirection === "outbound") {
       try {
         const intraRow = await fetchCampaignCallByCallId(callId);
+        isThemisOutboundCampaignContext = isThemisOutboundCampaignCall({
+          direction: explicitCallDirection,
+          campaignId,
+          variables: callVariables,
+          campaignCallRow: intraRow,
+        });
         const storedVars = parseStoredCallVariables(intraRow?.call_variables);
         mergeIntraIntoCallVariables(callVariables, intraRow, storedVars);
         if (callVariables.intra_campaign === "true") {
@@ -2629,6 +2643,20 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
     if (callVariables.intra_campaign === "true") {
       instructions = appendThemisIntraContextBlock(instructions, callVariables);
     }
+    const greetingPolicy = resolveThemisCampaignOpening({
+      callDirection,
+      isThemisOutboundCampaign: isThemisOutboundCampaignContext,
+      useInitialGreeting,
+      greeting,
+    });
+    useInitialGreeting = greetingPolicy.useInitialGreeting;
+    greeting = greetingPolicy.greeting;
+    if (greetingPolicy.source === "themis_campaign_prompt") {
+      console.log(`[GreetingGate] existing Themis campaign prompt auto-start enabled=true configured_greeting=${Boolean(greeting.trim())} callId=${callId}`);
+    }
+    const themisCampaignStartInstruction = greetingPolicy.source === "themis_campaign_prompt"
+      ? buildThemisCampaignStartInstruction(greeting)
+      : "";
     // Make substitute available outside this scope for SMS sending
     substituteVarsRef = substituteVars;
 
@@ -3136,14 +3164,20 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
         console.warn(`[RealtimeGA] skipping initial response.create — session.update failed (callId=${callId})`);
         return;
       }
-      if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || !pendingInitialResponse) {
-        return;
-      }
+      const greetingAction = resolveInitialResponseStartAction({
+        sessionConfigured,
+        openaiReady: Boolean(openaiWs && openaiWs.readyState === WebSocket.OPEN),
+        pending: pendingInitialResponse,
+        useInitialGreeting,
+        greeting,
+        promptDrivenStart: isThemisOutboundCampaignContext,
+      });
+      if (greetingAction === "wait" || greetingAction === "done") return;
 
       pendingInitialResponse = false;
 
       const hasGreetingText = Boolean((greeting || "").trim());
-      if (!useInitialGreeting || !hasGreetingText) {
+      if (greetingAction === "skip") {
         pendingInitialResponse = false;
         greetingInProgress = false;
         greetingCompletedAt = Date.now();
@@ -3163,7 +3197,7 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
       }
 
       const greetingResponse: Record<string, unknown> = {};
-      if (greeting) {
+      if (hasGreetingText) {
         // Strict, unambiguous instructions. Past versions said "in the original language"
         // which the model interpreted loosely and would translate Estonian → English.
         greetingResponse.instructions =
@@ -3442,7 +3476,7 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
         });
       }
 
-      greetingTokenLimitRaised = Boolean(greeting);
+      greetingTokenLimitRaised = Boolean(greeting.trim()) || isThemisOutboundCampaignContext;
 
       const gaTranscription = {
         model: "whisper-1",
@@ -3508,6 +3542,7 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
             tools: [],
             backendInstructions: fullInstructions,
             greetingText: greeting || "",
+            greetingAppendContent: themisCampaignStartInstruction || undefined,
           },
         });
       }
@@ -5676,7 +5711,8 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
           agentId = msg.start.customParameters?.agentId || "";
           calledNumber = msg.start.customParameters?.calledNumber || "";
           fromNumber = msg.start.customParameters?.fromNumber || "";
-          callDirection = (msg.start.customParameters?.direction === "inbound" ? "inbound" : "outbound");
+          explicitCallDirection = String(msg.start.customParameters?.direction ?? "");
+          callDirection = (explicitCallDirection === "inbound" ? "inbound" : "outbound");
           callSid = msg.start.customParameters?.callSid || "";
           campaignId = msg.start.customParameters?.campaignId || "";
           bridgeSelfTest = msg.start.customParameters?.bridgeSelfTest || "";
@@ -5685,7 +5721,8 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
           const varsParam = msg.start.customParameters?.variables || "";
           if (varsParam) {
             try {
-              callVariables = JSON.parse(varsParam);
+              const parsedVariables = JSON.parse(varsParam) as Record<string, string>;
+              callVariables = parsedVariables;
               console.log(`[MediaStream] Parsed ${Object.keys(callVariables).length} call variables (callId=${callId})`);
               if (callVariables.intra_campaign === "true") {
                 logThemisContext(callVariables, callId);

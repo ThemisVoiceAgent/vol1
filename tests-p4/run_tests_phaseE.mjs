@@ -145,6 +145,60 @@ const mk = (cfg) => {
   check("E11c still one append (idempotent)", sock.sent.filter(m => m.type === "session.instructions.append").length === 1);
 }
 
+// E15: an explicit Themis opening instruction overrides the global test hook and is appended once.
+{
+  const previousEnv = process.env.OPENAI_LIVE_GREETING_APPEND;
+  const policyContent = "Start the existing campaign prompt now; use its opening exactly once and add no new greeting.";
+  process.env.OPENAI_LIVE_GREETING_APPEND = "GLOBAL TEST OVERRIDE: do not use this for the scoped campaign";
+  try {
+    const { sock } = mk({
+      sessionConfig: {
+        instructions: "Short live frontend",
+        voice: "meridian",
+        tools: [],
+        greetingText: "Existing configured campaign greeting",
+        greetingAppendContent: policyContent,
+      },
+    });
+    sock.fakeMsg({ type: "session.started", session: { id: "live_policy" } });
+    const appends = sock.sent.filter(m => m.type === "session.instructions.append");
+    check("E15 explicit campaign opener wins over env and agent text", appends.length === 1 && appends[0].content === policyContent);
+    sock.fakeMsg({ type: "session.started", session: { id: "live_policy" } });
+    check("E15b scoped opener remains one-shot", sock.sent.filter(m => m.type === "session.instructions.append").length === 1);
+  } finally {
+    if (previousEnv === undefined) delete process.env.OPENAI_LIVE_GREETING_APPEND;
+    else process.env.OPENAI_LIVE_GREETING_APPEND = previousEnv;
+  }
+}
+
+// E16: silent caller integration seam — session readiness triggers response.create in the media-stream;
+// Live absorbs it and appends the existing campaign prompt instruction once.
+{
+  const policyContent = "Start the existing campaign prompt's opening now; do not wait for caller audio; do not create a new greeting.";
+  const { s, sock } = mk({
+    sessionConfig: {
+      instructions: "Approved campaign prompt remains in this session",
+      voice: "meridian",
+      tools: [],
+      greetingText: "",
+      greetingAppendContent: policyContent,
+    },
+  });
+  let readinessDispatches = 0;
+  s.on("message", (data) => {
+    const event = JSON.parse(data.toString());
+    if (event.type === "session.updated" && readinessDispatches === 0) {
+      readinessDispatches += 1;
+      s.send(JSON.stringify({ type: "response.create" }));
+    }
+  });
+  // No caller audio/transcript event is injected; readiness alone must start the opening.
+  sock.fakeMsg({ type: "session.started", session: { id: "live_silent" } });
+  sock.fakeMsg({ type: "session.started", session: { id: "live_silent" } });
+  const appends = sock.sent.filter(m => m.type === "session.instructions.append");
+  check("E16 silent caller readiness starts one existing-prompt opening", readinessDispatches === 1 && appends.length === 1 && appends[0].content === policyContent && !sock.sent.some(m => m.type === "response.create" || m.type === "session.input_audio.append"));
+}
+
 // E12: NO response.create forwarded (not a speak trigger in Live)
 {
   const { s, sock } = mk();

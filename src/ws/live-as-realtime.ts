@@ -42,10 +42,7 @@ export interface LiveAsRealtimeOptions {
     backendInstructions?: string;
     /** The agent's spoken greeting text; used to build the greeting append content. */
     greetingText?: string;
-    /**
-     * Explicit greeting append content override (controlled technical test). When set it
-     * replaces the greetingText-derived content. Set via env OPENAI_LIVE_GREETING_APPEND.
-     */
+    /** Explicit greeting append content override for a scoped call policy/test. */
     greetingAppendContent?: string;
   };
   /** Responses-delegation backend model. Live REQUIRES delegation for response.create. */
@@ -276,7 +273,11 @@ export class LiveAsRealtimeSocket {
     return Boolean((opts.sessionConfig.instructions || "").trim());
   }
 
-  private buildGreetingAppendContent(): { content: string; source: "env" | "agent" | "error" } {
+  private buildGreetingAppendContent(): { content: string; source: "policy" | "env" | "agent" | "error" } {
+    const policyContent = (this.opts?.sessionConfig.greetingAppendContent || "").trim();
+    if (policyContent) {
+      return { content: policyContent, source: "policy" };
+    }
     const override = process.env.OPENAI_LIVE_GREETING_APPEND;
     if (override && override.trim()) {
       return { content: override.trim(), source: "env" };
