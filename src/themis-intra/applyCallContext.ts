@@ -91,9 +91,28 @@ export function appendThemisIntraContextBlock(
 ): string {
   if (callVariables.intra_campaign !== "true") return instructions;
 
+  // Anchor relative payment deadlines to the actual Tallinn calendar date for
+  // this call. Without this runtime fact, the agent has no reliable meaning for
+  // "30 calendar days from today" and can accept an out-of-window date.
+  const todayParts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Tallinn",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const part = (type: string) => todayParts.find((item) => item.type === type)?.value;
+  const today = `${part("year")}-${part("month")}-${part("day")}`;
+  const [year, month, day] = today.split("-").map(Number);
+  const firstPaymentDeadline = new Date(Date.UTC(year, month - 1, day + 30))
+    .toISOString()
+    .slice(0, 10);
+
   const lines: string[] = [
     "",
     "--- THIS CALL — MANDATORY FACTS (override any example/test figures elsewhere in these instructions) ---",
+    `Today's calendar date in Europe/Tallinn: ${today}`,
+    `Latest valid date for the FIRST payment (30 calendar days from today): ${firstPaymentDeadline}`,
+    "FIRST-PAYMENT DEADLINE HAS PRIORITY: if the debtor proposes a first-payment date after the latest valid date above, say exactly: \"Ma vajan, et esimene makse toimuks hiljemalt 30 kalendripäeva jooksul alates tänasest.\" Then ask for a specific first-payment date on or before the deadline. Do not accept the later date. Address this deadline before negotiating the payment amount or responding to other objections. Continue the existing percentage and 30-calendar-day rules for later payments only after a valid first-payment date is agreed.",
   ];
 
   const name = callVariables.client_name || callVariables.debtor_name || callVariables.first_name;
