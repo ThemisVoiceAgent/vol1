@@ -3831,7 +3831,7 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
             // quiet window and synthesize the structured outcome from the transcript.
             {
               const at = assistantTranscript.toLowerCase();
-              const isGoodbye = /head (päeva|aega)|hüvasti|tšau|nägemist|kuulemiseni/.test(at);
+              const isGoodbye = /head (päeva|aega)|hüvasti|tšau|nägemist|kuulemiseni|kokkulepe on (fikseeritud|kirjas|tehtud)|lõpetan kõne/.test(at);
               if (isGoodbye) {
                 // Synthesize outcome once per call from the accumulated transcript.
                 if (!endCallStructuredOutcome && openaiWs) {
@@ -3918,6 +3918,22 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
             const transcriptTextAll = String(event.transcript || "").trim();
             console.log(`[Diag] user_transcript #${userTranscriptCount} (callId=${callId}): "${event.transcript}"`);
             transcriptLines.push(`[User]: ${event.transcript}`);
+
+            // Caller said goodbye: give the bot a moment for its own goodbye, then hang up.
+            if (
+              callDirection === "outbound" &&
+              transcriptTextAll.length <= 40 &&
+              /head (päeva|aega)|nägemist|tšau|hüvasti|kuulemiseni|\bbye\b/i.test(transcriptTextAll) &&
+              !goodbyeFallbackTimer
+            ) {
+              console.log(`[EndCall] caller goodbye detected — hanging up in 5s (callId=${callId})`);
+              goodbyeFallbackTimer = setTimeout(() => {
+                goodbyeFallbackTimer = null;
+                if (!endCallStructuredOutcome) endCallStructuredOutcome = { outcome: "other_completed" };
+                finalizeCall();
+                hangUpCall();
+              }, 5000);
+            }
 
             // 5331 voicemail detection (Henri): when the AI reaches a voicemail greeting,
             // END THE CALL IMMEDIATELY. Detect the greeting pattern in the user transcript
