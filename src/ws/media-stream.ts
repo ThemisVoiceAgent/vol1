@@ -1018,11 +1018,16 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
     "laps",
   ] as const;
 
+  // Occupant count is an IIZI roadside (inbound) concept only — never for outbound debt calls.
   const isOccupantCountGateBlocked = () =>
-    incidentNeedsOccupantCount && occupantCountStatus !== "confirmed";
+    callDirection === "inbound" && incidentNeedsOccupantCount && occupantCountStatus !== "confirmed";
 
   const emitOccupantCountRequiredSystemEvent = (source: string) => {
     if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) return;
+    if (callDirection !== "inbound") {
+      console.log(`[IIZI-Occupants] skip occupant ask — outbound call source=${source} callId=${callId}`);
+      return;
+    }
     if (
       useCombinedRegLocationSms &&
       callDirection === "inbound" &&
@@ -3860,6 +3865,8 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
                     console.log(`[EndCall] goodbye-fallback: no end_call from model — hanging up (callId=${callId})`);
                     if (!endCallStructuredOutcome) endCallStructuredOutcome = { outcome: "other_completed" };
                     finalizeCall();
+                    // finalizeCall only saves data — actually end the phone call.
+                    hangUpCall();
                   }, 4000);
                 }
               }
@@ -3953,7 +3960,7 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
               if (matchedRoadsideTrigger && !roadsideContextActive) {
                 roadsideContextActive = true;
               }
-              if (!incidentNeedsOccupantCount) {
+              if (!incidentNeedsOccupantCount && callDirection === "inbound") {
                 const matchedPassengerTrigger = OCCUPANT_REQUIRED_PASSENGER_TRIGGERS.find((kw) =>
                   callerSpeechLower.includes(kw)
                 );
@@ -5427,7 +5434,10 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
 
   // Hang up the Twilio call
   const hangUpCall = () => {
-    if (!callSid || !config.twilio.isConfigured) return;
+    if (!callSid || !config.twilio.isConfigured) {
+      console.warn(`[MediaStream] hangUpCall skipped callSid=${callSid || "(empty)"} twilioConfigured=${config.twilio.isConfigured} callId=${callId}`);
+      return;
+    }
 
     const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${config.twilio.accountSid}/Calls/${callSid}.json`;
     const authHeader = Buffer.from(`${config.twilio.accountSid}:${config.twilio.authToken}`).toString("base64");
@@ -5440,7 +5450,7 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
       },
       body: new URLSearchParams({ Status: "completed" }).toString(),
     })
-      .then(() => console.log(`[MediaStream] Twilio call ended (callSid=${callSid})`))
+      .then((r) => console.log(`[MediaStream] Twilio call ended status=${r.status} (callSid=${callSid})`))
       .catch((err) => console.error(`[MediaStream] Failed to hang up:`, err));
   };
 
