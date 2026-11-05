@@ -3533,11 +3533,18 @@ export function handleTwilioMediaStream(twilioWs: WebSocket) {
         //   session.instructions = SHORT voice frontend (this point forward is deferred to
         //   configure → session.start), delegation.responses.instructions = full business
         //   logic (the 28k agent prompt), greeting = ONE session.instructions.append.
+        console.log(`[LiveBridge] voice instructions business_prompt_chars=${fullInstructions.length} included=${fullInstructions.length <= 40000} callId=${callId}`);
         liveBridge.configure({
           apiKey: config.openai.apiKey,
           model: "gpt-live-1",
           sessionConfig: {
-            instructions: LIVE_FRONTEND_PROMPT,
+            // The backend delegate is never invoked in practice (delegated=0), so the voice
+            // model must see the agent's business rules (30-day deadline, amounts) itself.
+            // GPT-Live session.instructions cap is 16,384 tokens; stay well under it.
+            instructions:
+              fullInstructions.length <= 40000
+                ? `${LIVE_FRONTEND_PROMPT}\n\n--- AGENDI SKRIPT JA REEGLID (järgi täpselt) ---\n${fullInstructions}`
+                : LIVE_FRONTEND_PROMPT,
             voice: voice ? "meridian" : "meridian", // 5331 Phase-E final: production voice = meridian
             tools: [],
             backendInstructions: fullInstructions,

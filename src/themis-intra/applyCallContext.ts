@@ -112,7 +112,7 @@ export function appendThemisIntraContextBlock(
     "--- THIS CALL — MANDATORY FACTS (override any example/test figures elsewhere in these instructions) ---",
     `Today's calendar date in Europe/Tallinn: ${today}`,
     `Latest valid date for the FIRST payment (30 calendar days from today): ${firstPaymentDeadline}`,
-    "FIRST-PAYMENT DEADLINE HAS PRIORITY: if the debtor proposes a first-payment date after the latest valid date above, say exactly: \"Ma vajan, et esimene makse toimuks hiljemalt 30 kalendripäeva jooksul alates tänasest.\" Then ask for a specific first-payment date on or before the deadline. Do not accept the later date. Address this deadline before negotiating the payment amount or responding to other objections. Continue the existing percentage and 30-calendar-day rules for later payments only after a valid first-payment date is agreed.",
+    "FIRST-PAYMENT DEADLINE HAS PRIORITY: if the debtor proposes a first-payment date after the latest valid date above, say exactly: \"Makse peaks toimuma 30 kalendripäeva jooksul.\" Then ask for a specific first-payment date on or before the deadline. Do not accept the later date. Address this deadline before negotiating the payment amount or responding to other objections. Continue the existing percentage and 30-calendar-day rules for later payments only after a valid first-payment date is agreed.",
   ];
 
   const name = callVariables.client_name || callVariables.debtor_name || callVariables.first_name;
