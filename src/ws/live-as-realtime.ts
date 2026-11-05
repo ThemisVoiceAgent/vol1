@@ -298,8 +298,19 @@ export class LiveAsRealtimeSocket {
   private sendSessionStart(opts: LiveAsRealtimeOptions): void {
     if (this.startSent) return;
     this.startSent = true;
+    // GPT-Live docs "Greet before the caller speaks": the greeting must be present from the
+    // start as a developer message in session.input, otherwise the model may wait for the
+    // caller to speak first.
+    const greetingContent = this.buildGreetingAppendContent().content;
     const session: Record<string, unknown> = {
       model: opts.model,
+      input: [
+        {
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: greetingContent }],
+        },
+      ],
       // SHORT voice frontend (identity/language/tone/pace/interruption/delegation policy).
       instructions: opts.sessionConfig.instructions || "",
       audio: {
@@ -334,15 +345,32 @@ export class LiveAsRealtimeSocket {
       // debt-opening instruction (never a generic test greeting, never silence).
       this.log(`greeting SOURCE ERROR - agents.greeting missing! Using debt-opening instruction`);
     }
+    // Docs: after session.started send the same greeting once via session.commentary.append.
     this.rawSend({
-      type: "session.instructions.append",
+      type: "session.commentary.append",
       event_id: `themis_initial_greeting_${Date.now()}`,
       delegation_id: null,
       content: resolved.content,
     });
     this.log(`greeting append sent (source=${resolved.source}, content len=${resolved.content.length})`);
     this.logMetrics("greeting_append_sent");
+    // Watchdog: if the bot has said nothing and the caller has said nothing, nudge once more.
+    this.greetingWatchdog = setTimeout(() => {
+      this.greetingWatchdog = null;
+      if (this.outputTranscriptDeltas > 0 || this.inputTranscriptDeltas > 0) return;
+      if (this.ws.readyState !== WebSocket.OPEN) return;
+      this.rawSend({
+        type: "session.instructions.append",
+        event_id: `themis_initial_greeting_retry_${Date.now()}`,
+        delegation_id: null,
+        content: `Räägi KOHE, ära oota helistajat. ${resolved.content}`,
+      });
+      this.log(`greeting watchdog: bot silent ${LiveAsRealtimeSocket.GREETING_WATCHDOG_MS}ms after start — re-sent greeting`);
+    }, LiveAsRealtimeSocket.GREETING_WATCHDOG_MS);
   }
+
+  private greetingWatchdog: ReturnType<typeof setTimeout> | null = null;
+  private static readonly GREETING_WATCHDOG_MS = 2500;
 
   private onLiveMessage(data: RawData): void {
     let msg: Record<string, unknown>;
@@ -380,6 +408,7 @@ export class LiveAsRealtimeSocket {
         this.sendGreetingAppendOnce();
         break;
       }
+      case "session.commentary.appended":
       case "session.instructions.appended": {
         this.greetingAppendAck = true;
         this.log(`greeting append ACK (session.instructions.appended)`);
@@ -456,6 +485,7 @@ export class LiveAsRealtimeSocket {
         break;
       }
       case "session.closed": {
+        if (this.greetingWatchdog) { clearTimeout(this.greetingWatchdog); this.greetingWatchdog = null; }
         // Flush pending accumulated transcripts so finalizeCall captures them.
         if (this.outTranscriptFlushTimer) { clearTimeout(this.outTranscriptFlushTimer); this.outTranscriptFlushTimer = null; }
         if (this.inTranscriptFlushTimer) { clearTimeout(this.inTranscriptFlushTimer); this.inTranscriptFlushTimer = null; }
